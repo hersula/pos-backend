@@ -135,7 +135,81 @@ Authorization: Bearer <accessToken>
 
 ---
 
-## 4. Catatan Penting untuk Fase Berikutnya
+## 4. Modul Inventori (Fase 2)
+
+Semua endpoint di bawah butuh header `Authorization: Bearer <accessToken>` milik **user tenant** (dari `/api/auth/login`), bukan token admin.
+
+| Method | Endpoint | Role | Deskripsi |
+|---|---|---|---|
+| GET | `/api/categories` | semua role | List kategori |
+| POST | `/api/categories` | OWNER, MANAGER, GUDANG | Tambah kategori |
+| PUT/DELETE | `/api/categories/:id` | OWNER, MANAGER (delete) | Edit/hapus kategori |
+| GET | `/api/warehouses` | semua role | List gudang/toko |
+| POST | `/api/warehouses` | OWNER, MANAGER | Tambah gudang |
+| PUT | `/api/warehouses/:id` | OWNER, MANAGER | Edit gudang |
+| DELETE | `/api/warehouses/:id` | OWNER | Hapus gudang (harus stok 0) |
+| GET | `/api/products?search=&categoryId=&lowStock=true&page=&pageSize=` | semua role | List produk + stok per warehouse |
+| POST | `/api/products` | OWNER, MANAGER, GUDANG | Tambah produk (+ stok awal opsional) |
+| GET/PUT | `/api/products/:id` | semua role / OWNER,MANAGER,GUDANG | Detail / edit produk |
+| DELETE | `/api/products/:id` | OWNER, MANAGER | Soft-delete (nonaktifkan) produk |
+| GET | `/api/stocks?warehouseId=&lowStock=true` | semua role | Level stok saat ini + flag stok minim |
+| GET | `/api/stock-movements?productId=&warehouseId=&page=` | semua role | Kartu stok (histori mutasi) |
+| POST | `/api/stock-movements` | OWNER, MANAGER, GUDANG | Koreksi stok manual (stok opname, rusak/hilang) |
+| GET/POST | `/api/suppliers` | semua role / OWNER,MANAGER,GUDANG | List/tambah supplier |
+| PUT/DELETE | `/api/suppliers/:id` | OWNER, MANAGER, GUDANG (edit) / OWNER, MANAGER (delete) | Edit/hapus supplier |
+| GET/POST | `/api/purchase-orders` | semua role / OWNER,MANAGER,GUDANG | List/buat PO (status awal `DRAFT`, stok belum berubah) |
+| GET | `/api/purchase-orders/:id` | semua role | Detail PO |
+| POST | `/api/purchase-orders/:id/receive` | OWNER, MANAGER, GUDANG | Terima barang → stok bertambah + `costPrice` produk ter-update |
+
+### Contoh alur testing
+
+```bash
+TOKEN="<accessToken hasil login user tenant>"
+
+# 1. Buat kategori
+curl -X POST http://localhost:3000/api/categories \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "name": "Minuman" }'
+
+# 2. Buat produk + stok awal (warehouseId ambil dari GET /api/warehouses, otomatis ada "Toko Pusat" setelah tenant di-approve)
+curl -X POST http://localhost:3000/api/products \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "name": "Teh Botol 450ml",
+    "categoryId": "<CATEGORY_ID>",
+    "sellPrice": 6000,
+    "costPrice": 4000,
+    "minStock": 10,
+    "initialStock": { "warehouseId": "<WAREHOUSE_ID>", "quantity": 50 }
+  }'
+
+# 3. Buat PO pembelian ke supplier
+curl -X POST http://localhost:3000/api/purchase-orders \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "warehouseId": "<WAREHOUSE_ID>",
+    "items": [ { "productId": "<PRODUCT_ID>", "qty": 100, "unitCost": 3800 } ]
+  }'
+
+# 4. Terima barang PO -> stok otomatis bertambah 100
+curl -X POST http://localhost:3000/api/purchase-orders/<PO_ID>/receive \
+  -H "Authorization: Bearer $TOKEN"
+
+# 5. Cek kartu stok
+curl "http://localhost:3000/api/stock-movements?productId=<PRODUCT_ID>" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Desain penting
+
+- **`src/lib/inventory.ts` → `adjustStock()`** adalah satu-satunya fungsi yang boleh mengubah `quantity` di tabel `stocks`. Semua fitur (adjustment manual, PO receive, dan nanti modul Penjualan saat item terjual) memanggil fungsi ini di dalam `prisma.$transaction(...)` supaya angka stok dan histori (`stock_movements`) tidak pernah tidak-sinkron.
+- Produk **tidak pernah dihapus permanen** (`DELETE /api/products/:id` hanya set `isActive: false`) supaya data transaksi lama tetap valid secara referensial.
+- Purchase Order berstatus `DRAFT` **tidak mengubah stok** — stok baru bertambah saat endpoint `/receive` dipanggil. Ini meniru proses nyata: PO dibuat dulu, barang fisik baru masuk gudang belakangan.
+- `costPrice` produk otomatis mengikuti harga beli PO terakhir (metode "harga beli terbaru"), dipakai nanti untuk hitung HPP di modul Akunting.
+
+---
+
+## 5. Catatan Penting untuk Fase Berikutnya
 
 - Token access berisi `tenantId` + `role` — dipakai di modul Inventori/Penjualan/Akunting agar semua query otomatis `WHERE tenant_id = ...`. Pola untuk route baru:
   ```ts

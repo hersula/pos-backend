@@ -77,6 +77,16 @@ export function getTenantUserFromRequest(req: NextRequest): TenantUserPayload {
   }
 }
 
+// ---------- Role-based access control ----------
+export function requireRole(user: TenantUserPayload, allowedRoles: TenantUserPayload["role"][]) {
+  if (!allowedRoles.includes(user.role)) {
+    throw new AuthError(
+      `Role "${user.role}" tidak memiliki akses untuk aksi ini. Dibutuhkan salah satu dari: ${allowedRoles.join(", ")}`,
+      403
+    );
+  }
+}
+
 export function getAdminFromRequest(req: NextRequest): AdminPayload {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.startsWith("Bearer ")) {

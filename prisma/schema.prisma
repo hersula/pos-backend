@@ -168,6 +168,8 @@ model Product {
   category Category? @relation(fields: [categoryId], references: [id])
   stocks   Stock[]
   saleItems SaleItem[]
+  stockMovements StockMovement[]
+  purchaseOrderItems PurchaseOrderItem[]
 
   @@map("products")
 }
@@ -180,6 +182,8 @@ model Warehouse {
   tenant Tenant  @relation(fields: [tenantId], references: [id])
   stocks Stock[]
   sales  Sale[]
+  stockMovements StockMovement[]
+  purchaseOrders PurchaseOrder[]
 
   @@map("warehouses")
 }
@@ -198,6 +202,32 @@ model Stock {
   @@map("stocks")
 }
 
+enum StockMovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  TRANSFER
+}
+
+model StockMovement {
+  id            String            @id @default(uuid())
+  tenantId      String            @map("tenant_id")
+  productId     String            @map("product_id")
+  warehouseId   String            @map("warehouse_id")
+  type          StockMovementType
+  qty           Int
+  referenceType String?           @map("reference_type") // 'SALE','PURCHASE','MANUAL','TRANSFER'
+  referenceId   String?           @map("reference_id")
+  note          String?
+  createdBy     String?           @map("created_by")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@map("stock_movements")
+}
+
 model Supplier {
   id       String  @id @default(uuid())
   tenantId String  @map("tenant_id")
@@ -205,9 +235,49 @@ model Supplier {
   phone    String?
   address  String? @db.Text
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
+  tenant          Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrders  PurchaseOrder[]
 
   @@map("suppliers")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrder {
+  id          String              @id @default(uuid())
+  tenantId    String              @map("tenant_id")
+  supplierId  String?             @map("supplier_id")
+  warehouseId String              @map("warehouse_id")
+  poNumber    String              @map("po_number")
+  status      PurchaseOrderStatus @default(DRAFT)
+  total       Decimal             @default(0) @db.Decimal(14, 2)
+  createdBy   String?             @map("created_by")
+  createdAt   DateTime            @default(now()) @map("created_at")
+
+  supplier Supplier?          @relation(fields: [supplierId], references: [id])
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
+  items    PurchaseOrderItem[]
+
+  @@unique([tenantId, poNumber])
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id              String  @id @default(uuid())
+  purchaseOrderId String  @map("purchase_order_id")
+  productId       String  @map("product_id")
+  qty             Int
+  unitCost        Decimal @map("unit_cost") @db.Decimal(14, 2)
+  subtotal        Decimal @db.Decimal(14, 2)
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  product       Product       @relation(fields: [productId], references: [id])
+
+  @@map("purchase_order_items")
 }
 
 // ==================================================
