@@ -1,0 +1,376 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================================================
+// TENANT & LANGGANAN
+// ==================================================
+
+enum PlanType {
+  FREE
+  SUBSCRIBE
+}
+
+enum TenantStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+model Tenant {
+  id             String       @id @default(uuid())
+  businessName   String       @map("business_name")
+  ownerName      String       @map("owner_name")
+  email          String       @unique
+  phone          String?
+  address        String?      @db.Text
+  planType       PlanType     @default(FREE) @map("plan_type")
+  status         TenantStatus @default(PENDING)
+  approvedBy     String?      @map("approved_by")
+  approvedAt     DateTime?    @map("approved_at")
+  rejectedReason String?      @map("rejected_reason") @db.Text
+  createdAt      DateTime     @default(now()) @map("created_at")
+  updatedAt      DateTime     @updatedAt @map("updated_at")
+
+  subscriptions Subscription[]
+  users         User[]
+  warehouses    Warehouse[]
+  categories    Category[]
+  products      Product[]
+  suppliers     Supplier[]
+  customers     Customer[]
+  sales         Sale[]
+  accounts      ChartOfAccount[]
+  expenses      Expense[]
+
+  @@map("tenants")
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PAID
+}
+
+model Subscription {
+  id            String              @id @default(uuid())
+  tenantId      String              @map("tenant_id")
+  planName      String              @map("plan_name")
+  price         Decimal             @default(0) @db.Decimal(14, 2)
+  billingCycle  BillingCycle        @default(MONTHLY) @map("billing_cycle")
+  startDate     DateTime            @map("start_date") @db.Date
+  endDate       DateTime            @map("end_date") @db.Date
+  status        SubscriptionStatus  @default(ACTIVE)
+  paymentStatus PaymentStatus       @default(UNPAID) @map("payment_status")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@map("subscriptions")
+}
+
+// ==================================================
+// SUPER ADMIN (PLATFORM)
+// ==================================================
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN_SUPPORT
+}
+
+model AdminUser {
+  id        String    @id @default(uuid())
+  name      String?
+  email     String    @unique
+  password  String
+  role      AdminRole @default(ADMIN_SUPPORT)
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@map("admin_users")
+}
+
+// ==================================================
+// USER PER TENANT
+// ==================================================
+
+enum UserRole {
+  OWNER
+  MANAGER
+  KASIR
+  GUDANG
+  AKUNTAN
+}
+
+model User {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String?
+  email     String?
+  phone     String?
+  password  String
+  role      UserRole @default(KASIR)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  sales  Sale[] @relation("CashierSales")
+
+  @@unique([tenantId, email])
+  @@map("users")
+}
+
+// ==================================================
+// INVENTORI
+// ==================================================
+
+model Category {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  name     String
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  categoryId String?  @map("category_id")
+  sku        String?
+  barcode    String?
+  name       String
+  unit       String   @default("pcs")
+  costPrice  Decimal  @default(0) @map("cost_price") @db.Decimal(14, 2)
+  sellPrice  Decimal  @map("sell_price") @db.Decimal(14, 2)
+  minStock   Int      @default(0) @map("min_stock")
+  imageUrl   String?  @map("image_url")
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id])
+  category Category? @relation(fields: [categoryId], references: [id])
+  stocks   Stock[]
+  saleItems SaleItem[]
+
+  @@map("products")
+}
+
+model Warehouse {
+  id       String @id @default(uuid())
+  tenantId String @map("tenant_id")
+  name     String
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id])
+  stocks Stock[]
+  sales  Sale[]
+
+  @@map("warehouses")
+}
+
+model Stock {
+  id          String @id @default(uuid())
+  tenantId    String @map("tenant_id")
+  productId   String @map("product_id")
+  warehouseId String @map("warehouse_id")
+  quantity    Int    @default(0)
+
+  product   Product   @relation(fields: [productId], references: [id])
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id])
+
+  @@unique([productId, warehouseId])
+  @@map("stocks")
+}
+
+model Supplier {
+  id       String  @id @default(uuid())
+  tenantId String  @map("tenant_id")
+  name     String
+  phone    String?
+  address  String? @db.Text
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@map("suppliers")
+}
+
+// ==================================================
+// PENJUALAN (POS)
+// ==================================================
+
+model Customer {
+  id       String  @id @default(uuid())
+  tenantId String  @map("tenant_id")
+  name     String?
+  phone    String?
+  email    String?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  sales  Sale[]
+
+  @@map("customers")
+}
+
+enum DiscountType {
+  PERCENT
+  NOMINAL
+}
+
+enum SaleStatus {
+  PAID
+  PARTIAL
+  CANCELLED
+  REFUNDED
+}
+
+model Sale {
+  id              String       @id @default(uuid())
+  tenantId        String       @map("tenant_id")
+  warehouseId     String       @map("warehouse_id")
+  customerId      String?      @map("customer_id")
+  invoiceNo       String       @map("invoice_no")
+  cashierId       String       @map("cashier_id")
+  subtotal        Decimal      @default(0) @db.Decimal(14, 2)
+  discountType    DiscountType @default(NOMINAL) @map("discount_type")
+  discountValue   Decimal      @default(0) @map("discount_value") @db.Decimal(14, 2)
+  discountAmount  Decimal      @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxPercent      Decimal      @default(11) @map("tax_percent") @db.Decimal(5, 2)
+  taxAmount       Decimal      @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  grandTotal      Decimal      @default(0) @map("grand_total") @db.Decimal(14, 2)
+  paidTotal       Decimal      @default(0) @map("paid_total") @db.Decimal(14, 2)
+  changeAmount    Decimal      @default(0) @map("change_amount") @db.Decimal(14, 2)
+  status          SaleStatus   @default(PAID)
+  note            String?
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id])
+  warehouse Warehouse    @relation(fields: [warehouseId], references: [id])
+  customer  Customer?    @relation(fields: [customerId], references: [id])
+  cashier   User         @relation("CashierSales", fields: [cashierId], references: [id])
+  items     SaleItem[]
+  payments  SalePayment[]
+
+  @@unique([tenantId, invoiceNo])
+  @@map("sales")
+}
+
+model SaleItem {
+  id             String  @id @default(uuid())
+  saleId         String  @map("sale_id")
+  productId      String  @map("product_id")
+  qty            Int
+  unitPrice      Decimal @map("unit_price") @db.Decimal(14, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  subtotal       Decimal @db.Decimal(14, 2)
+
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+
+  @@map("sale_items")
+}
+
+enum PaymentMethod {
+  CASH
+  DEBIT
+  CREDIT
+  QRIS
+  TRANSFER
+  EWALLET
+}
+
+model SalePayment {
+  id           String        @id @default(uuid())
+  saleId       String        @map("sale_id")
+  method       PaymentMethod
+  amount       Decimal       @db.Decimal(14, 2)
+  referenceNo  String?       @map("reference_no")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  sale Sale @relation(fields: [saleId], references: [id])
+
+  @@map("sale_payments")
+}
+
+// ==================================================
+// AKUNTING
+// ==================================================
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+model ChartOfAccount {
+  id       String      @id @default(uuid())
+  tenantId String      @map("tenant_id")
+  code     String
+  name     String
+  type     AccountType
+
+  tenant       Tenant         @relation(fields: [tenantId], references: [id])
+  journalLines JournalLine[]
+
+  @@unique([tenantId, code])
+  @@map("chart_of_accounts")
+}
+
+model JournalEntry {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  entryDate     DateTime @map("entry_date") @db.Date
+  referenceType String?  @map("reference_type")
+  referenceId   String?  @map("reference_id")
+  description   String?
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  lines JournalLine[]
+
+  @@map("journal_entries")
+}
+
+model JournalLine {
+  id             String  @id @default(uuid())
+  journalEntryId String  @map("journal_entry_id")
+  accountId      String  @map("account_id")
+  debit          Decimal @default(0) @db.Decimal(14, 2)
+  credit         Decimal @default(0) @db.Decimal(14, 2)
+
+  journalEntry JournalEntry   @relation(fields: [journalEntryId], references: [id])
+  account      ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@map("journal_lines")
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  tenantId    String   @map("tenant_id")
+  category    String?
+  amount      Decimal  @db.Decimal(14, 2)
+  description String?
+  expenseDate DateTime @map("expense_date") @db.Date
+  createdBy   String?  @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@map("expenses")
+}
