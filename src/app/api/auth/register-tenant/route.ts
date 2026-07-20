@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { hashPassword } from "@/lib/auth";
 
 const registerSchema = z.object({
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
     const hashedPassword = await hashPassword(password);
 
     // Buat tenant (status PENDING) + user OWNER pertama dalam satu transaksi
-    const tenant = await prisma.$transaction(async (tx) => {
+    const tenant = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newTenant = await tx.tenant.create({
         data: {
           businessName,

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock } from "@/lib/inventory";
+import { postPurchaseJournal } from "@/lib/accounting";
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -20,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ message: "Purchase order ini sudah dibatalkan" }, { status: 409 });
     }
 
-    await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       for (const item of po.items) {
         // Tambah stok di gudang tujuan PO
         await adjustStock(tx, {
@@ -45,9 +47,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
       await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: "RECEIVED" } });
 
-      // TODO fase Akunting: buat journal_entries otomatis di sini
-      //   Debit  1300 Persediaan Barang   sebesar po.total
-      //   Kredit 2000 Hutang Usaha        sebesar po.total   (jika belum dibayar tunai)
+      // Jurnal akunting otomatis: Debit Persediaan, Kredit Hutang Usaha
+      await postPurchaseJournal(tx, {
+        tenantId: user.tenantId,
+        poId: po.id,
+        poNumber: po.poNumber,
+        entryDate: new Date(),
+        total: Number(po.total),
+      });
     });
 
     return NextResponse.json({ message: `PO ${po.poNumber} berhasil diterima, stok telah diperbarui.` });

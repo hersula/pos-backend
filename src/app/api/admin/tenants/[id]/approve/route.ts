@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import type { Prisma } from "@prisma/client";
 import { getAdminFromRequest, AuthError } from "@/lib/auth";
+import { ACCOUNT_CODES } from "@/lib/accounting";
 
 // Chart of accounts default yang otomatis dibuat saat tenant di-approve
 const DEFAULT_ACCOUNTS = [
-  { code: "1000", name: "Kas", type: "ASSET" as const },
-  { code: "1100", name: "Bank", type: "ASSET" as const },
-  { code: "1200", name: "Piutang Usaha", type: "ASSET" as const },
-  { code: "1300", name: "Persediaan Barang", type: "ASSET" as const },
-  { code: "2000", name: "Hutang Usaha", type: "LIABILITY" as const },
-  { code: "2100", name: "PPN Keluaran (Hutang Pajak)", type: "LIABILITY" as const },
-  { code: "3000", name: "Modal Pemilik", type: "EQUITY" as const },
-  { code: "4000", name: "Pendapatan Penjualan", type: "REVENUE" as const },
-  { code: "5000", name: "Harga Pokok Penjualan (HPP)", type: "EXPENSE" as const },
-  { code: "6000", name: "Beban Operasional", type: "EXPENSE" as const },
+  { code: ACCOUNT_CODES.KAS, name: "Kas", type: "ASSET" as const },
+  { code: ACCOUNT_CODES.BANK, name: "Bank", type: "ASSET" as const },
+  { code: ACCOUNT_CODES.PIUTANG_USAHA, name: "Piutang Usaha", type: "ASSET" as const },
+  { code: ACCOUNT_CODES.PERSEDIAAN, name: "Persediaan Barang", type: "ASSET" as const },
+  { code: ACCOUNT_CODES.HUTANG_USAHA, name: "Hutang Usaha", type: "LIABILITY" as const },
+  { code: ACCOUNT_CODES.PPN_KELUARAN, name: "PPN Keluaran (Hutang Pajak)", type: "LIABILITY" as const },
+  { code: ACCOUNT_CODES.MODAL_PEMILIK, name: "Modal Pemilik", type: "EQUITY" as const },
+  { code: ACCOUNT_CODES.PENDAPATAN_PENJUALAN, name: "Pendapatan Penjualan", type: "REVENUE" as const },
+  { code: ACCOUNT_CODES.HPP, name: "Harga Pokok Penjualan (HPP)", type: "EXPENSE" as const },
+  { code: ACCOUNT_CODES.BEBAN_OPERASIONAL, name: "Beban Operasional", type: "EXPENSE" as const },
 ];
 
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
@@ -28,7 +30,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ message: "Tenant sudah di-approve sebelumnya" }, { status: 409 });
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const approvedTenant = await tx.tenant.update({
         where: { id: tenant.id },
         data: {

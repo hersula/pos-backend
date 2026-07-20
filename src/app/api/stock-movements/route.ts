@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock, StockInsufficientError } from "@/lib/inventory";
@@ -14,7 +15,7 @@ export async function GET(req: NextRequest) {
     const page = Math.max(1, Number(searchParams.get("page") ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(searchParams.get("pageSize") ?? 30)));
 
-    const where = {
+    const where: Prisma.StockMovementWhereInput = {
       tenantId: user.tenantId,
       ...(productId ? { productId } : {}),
       ...(warehouseId ? { warehouseId } : {}),

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock } from "@/lib/inventory";
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
     const page = Math.max(1, Number(searchParams.get("page") ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(searchParams.get("pageSize") ?? 20)));
 
-    const where = {
+    const where: Prisma.ProductWhereInput = {
       tenantId: user.tenantId,
       ...(includeInactive ? {} : { isActive: true }),
       ...(categoryId ? { categoryId } : {}),
@@ -43,13 +44,13 @@ export async function GET(req: NextRequest) {
     ]);
 
     // Total stok gabungan semua warehouse per produk (utk tampilan list & cek low stock)
-    let result = products.map((p) => ({
+    let result = products.map((p: (typeof products)[number]) => ({
       ...p,
-      totalStock: p.stocks.reduce((sum, s) => sum + s.quantity, 0),
+      totalStock: p.stocks.reduce((sum: number, s: (typeof p.stocks)[number]) => sum + s.quantity, 0),
     }));
 
     if (lowStockOnly) {
-      result = result.filter((p) => p.totalStock <= p.minStock);
+      result = result.filter((p: (typeof result)[number]) => p.totalStock <= p.minStock);
     }
 
     return NextResponse.json({
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
       if (dup) return NextResponse.json({ message: "Barcode sudah dipakai produk lain" }, { status: 409 });
     }
 
-    const product = await prisma.$transaction(async (tx) => {
+    const product = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       const newProduct = await tx.product.create({
         data: {
           tenantId: user.tenantId,

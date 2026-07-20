@@ -209,7 +209,161 @@ curl "http://localhost:3000/api/stock-movements?productId=<PRODUCT_ID>" \
 
 ---
 
-## 5. Catatan Penting untuk Fase Berikutnya
+## 5. Modul Penjualan / POS (Fase 3)
+
+| Method | Endpoint | Role | Deskripsi |
+|---|---|---|---|
+| GET | `/api/sales?status=&warehouseId=&cashierId=&dateFrom=&dateTo=&page=` | semua role | Riwayat transaksi |
+| POST | `/api/sales` | OWNER, MANAGER, KASIR | Buat transaksi baru (diskon, PPN, split payment) |
+| GET | `/api/sales/:id` | semua role | Detail transaksi (dipakai buat render struk) |
+| POST | `/api/sales/:id/cancel` | OWNER, MANAGER | Batalkan transaksi → stok otomatis dikembalikan |
+| POST | `/api/sales/:id/payments` | OWNER, MANAGER, KASIR | Tambah pembayaran susulan (pelunasan status `PARTIAL`) |
+| GET/POST | `/api/customers` | semua role | List/tambah pelanggan |
+| PUT/DELETE | `/api/customers/:id` | semua role | Edit/hapus pelanggan |
+| GET | `/api/reports/sales-summary?dateFrom=&dateTo=&warehouseId=&cashierId=` | semua role | Ringkasan tutup kasir: omzet, diskon, PPN, rekap per metode bayar |
+
+### Body `POST /api/sales`
+
+```json
+{
+  "warehouseId": "<WAREHOUSE_ID>",
+  "customerId": null,
+  "items": [
+    { "productId": "<PRODUCT_ID_1>", "qty": 2, "unitPrice": 6000 },
+    { "productId": "<PRODUCT_ID_2>", "qty": 1, "unitPrice": 15000, "discountAmount": 1000 }
+  ],
+  "discountType": "PERCENT",
+  "discountValue": 5,
+  "taxPercent": 11,
+  "payments": [
+    { "method": "CASH", "amount": 20000 },
+    { "method": "QRIS", "amount": 10000, "referenceNo": "TRX123456" }
+  ],
+  "note": "Bungkus terpisah"
+}
+```
+
+- `unitPrice` boleh dikosongkan → otomatis ambil `sellPrice` produk saat ini.
+- `discountType`/`discountValue` berlaku di level struk (subtotal). Diskon per item pakai `discountAmount` di masing-masing item.
+- `payments` bisa lebih dari satu baris (split payment) — total dari semua metode dibandingkan ke `grandTotal`:
+  - totalPembayaran ≥ grandTotal → status `PAID`, sisa lebih jadi `changeAmount` (kembalian)
+  - totalPembayaran < grandTotal → status `PARTIAL` (tercatat sebagai piutang, bisa dilunasi lewat `POST /api/sales/:id/payments`)
+- Stok dikurangi otomatis per item saat transaksi dibuat, dan gagal total (rollback) kalau ada 1 saja produk yang stoknya tidak cukup — respons `400` dengan pesan stok yang kurang.
+
+### Contoh testing
+
+```bash
+TOKEN="<accessToken kasir/owner>"
+
+curl -X POST http://localhost:3000/api/sales \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{
+    "warehouseId": "<WAREHOUSE_ID>",
+    "items": [ { "productId": "<PRODUCT_ID>", "qty": 3 } ],
+    "discountType": "NOMINAL",
+    "discountValue": 2000,
+    "taxPercent": 11,
+    "payments": [ { "method": "CASH", "amount": 30000 } ]
+  }'
+
+# Cek detail utk cetak struk
+curl "http://localhost:3000/api/sales/<SALE_ID>" -H "Authorization: Bearer $TOKEN"
+
+# Ringkasan tutup kasir hari ini
+curl "http://localhost:3000/api/reports/sales-summary" -H "Authorization: Bearer $TOKEN"
+```
+
+### Desain penting
+
+- **`src/lib/sales.ts`** — `calculateSaleTotals()` (rumus subtotal → diskon → PPN → grand total, dipakai backend agar frontend tidak perlu dipercaya untuk hitung total) dan `generateInvoiceNumber()` (format `INV-YYYYMMDD-0001`, sequence per tenant per hari).
+- Pengurangan stok memakai `adjustStock()` yang sama dari modul Inventori (`referenceType: 'SALE'`), sehingga kartu stok (`/api/stock-movements`) otomatis mencatat histori penjualan juga.
+- Pembatalan transaksi mengembalikan stok dengan `allowNegative: true` supaya tetap bisa dibatalkan meski produk sudah diubah/dinonaktifkan setelahnya.
+- Endpoint `sales-summary` dirancang untuk fitur "Tutup Kasir" di Flutter — kasir bisa mencocokkan uang cash fisik & mutasi QRIS/EDC terhadap rekap `byPaymentMethod`.
+
+---
+
+## 6. Modul Akunting (Fase 4)
+
+Prinsip: **tidak ada input jurnal manual untuk transaksi operasional** — jurnal dibuat otomatis dan konsisten setiap kali ada Penjualan, Penerimaan PO, atau Beban dicatat. User tinggal melihat laporannya.
+
+| Method | Endpoint | Role | Deskripsi |
+|---|---|---|---|
+| GET/POST | `/api/accounting/chart-of-accounts` | semua role / OWNER,AKUNTAN | Lihat/tambah akun kustom (10 akun default sudah otomatis ada) |
+| PUT/DELETE | `/api/accounting/chart-of-accounts/:id` | OWNER, AKUNTAN | Rename akun / hapus akun kustom (akun default tidak bisa dihapus) |
+| GET | `/api/accounting/journal?dateFrom=&dateTo=&referenceType=&page=` | OWNER, MANAGER, AKUNTAN | Jurnal umum — semua entry + baris debit/kredit |
+| GET | `/api/accounting/ledger?accountId=&dateFrom=&dateTo=` | OWNER, MANAGER, AKUNTAN | Buku besar per akun, lengkap saldo berjalan |
+| GET/POST | `/api/expenses` | semua role / OWNER,MANAGER,AKUNTAN | List/catat beban operasional (auto-jurnal) |
+| DELETE | `/api/expenses/:id` | OWNER, MANAGER, AKUNTAN | Hapus beban → otomatis buat jurnal balik |
+| GET | `/api/reports/profit-loss?dateFrom=&dateTo=` | OWNER, MANAGER, AKUNTAN | Laporan Laba Rugi: Pendapatan − HPP = Laba Kotor − Beban Operasional = Laba Bersih |
+
+### Kapan jurnal otomatis dibuat
+
+| Kejadian | Jurnal |
+|---|---|
+| `POST /api/sales` (transaksi baru) | Debit Kas/Bank (+Piutang jika `PARTIAL`) — Kredit Pendapatan & PPN Keluaran, plus Debit HPP — Kredit Persediaan sebesar harga modal barang terjual |
+| `POST /api/sales/:id/cancel` | Jurnal balik (reversing entry) otomatis dari jurnal penjualan asal |
+| `POST /api/purchase-orders/:id/receive` | Debit Persediaan Barang — Kredit Hutang Usaha sebesar total PO |
+| `POST /api/expenses` | Debit Beban Operasional — Kredit Kas |
+| `DELETE /api/expenses/:id` | Jurnal balik otomatis dari jurnal beban asal |
+
+Semua ini terjadi **di dalam `prisma.$transaction` yang sama** dengan aksi utamanya (lihat `src/lib/accounting.ts`), jadi tidak mungkin ada transaksi penjualan yang tersimpan tanpa jurnalnya, atau sebaliknya.
+
+### Contoh testing
+
+```bash
+TOKEN="<accessToken owner/akuntan>"
+
+# Catat beban listrik
+curl -X POST http://localhost:3000/api/expenses \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "category": "Listrik", "amount": 350000, "expenseDate": "2026-07-01", "description": "Tagihan Juli" }'
+
+# Lihat jurnal umum bulan ini
+curl "http://localhost:3000/api/accounting/journal?dateFrom=2026-07-01&dateTo=2026-07-31" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Buku besar akun Kas (code 1000) - ambil accountId dari GET /api/accounting/chart-of-accounts
+curl "http://localhost:3000/api/accounting/ledger?accountId=<ACCOUNT_ID_KAS>" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Laporan laba rugi bulan berjalan
+curl "http://localhost:3000/api/reports/profit-loss" -H "Authorization: Bearer $TOKEN"
+```
+
+### Desain penting
+
+- **`src/lib/accounting.ts`** — `createJournalEntry()` memvalidasi total debit harus sama dengan total kredit (toleransi 1 sen) sebelum simpan, jadi tidak mungkin ada jurnal yang tidak balance masuk ke database.
+- `postSaleJournal()` menggabungkan semua metode pembayaran non-tunai (DEBIT/CREDIT/QRIS/TRANSFER/EWALLET) ke akun **1100 Bank** demi kesederhanaan. Kalau butuh akun terpisah per metode (mis. akun khusus "Piutang EDC"), tinggal tambah `ACCOUNT_CODES` baru dan sesuaikan mapping di fungsi ini.
+- `reverseJournalForReference()` dipakai baik untuk pembatalan penjualan maupun penghapusan beban — mencari semua jurnal yang terhubung ke sebuah referensi lalu membuat entry baru dengan debit/kredit tertukar, bukan menghapus histori asli (prinsip *audit trail* akunting: data lama tidak boleh hilang).
+- HPP (harga pokok penjualan) dihitung dari `product.costPrice` **pada saat produk terjual** (bukan harga beli rata-rata/FIFO) — cukup akurat untuk UMKM, dan `costPrice` sendiri otomatis ter-update tiap kali PO di-receive (lihat modul Inventori).
+- Laporan Laba Rugi murni dihitung dari `journal_lines`, bukan query langsung ke tabel `sales`/`expenses` — supaya kalau suatu saat ada jurnal manual tambahan, laporan tetap akurat.
+
+---
+
+## 8. Admin Panel Web (Fase 5)
+
+Halaman web untuk tim platform meninjau & menyetujui/menolak pendaftaran tenant — bagian dari project Next.js yang sama (bukan project terpisah), jalan otomatis begitu `npm run dev` dijalankan.
+
+| Halaman | URL | Deskripsi |
+|---|---|---|
+| Login | `/admin/login` | Login super admin (pakai akun dari `npm run seed`) |
+| Dashboard | `/admin/dashboard` | Tabel tenant dengan filter status, pencarian, tombol Setujui/Tolak, dan ringkasan jumlah per status |
+
+Cara pakai:
+```bash
+npm run dev
+# buka http://localhost:3000/admin
+```
+
+- Token admin disimpan di `localStorage` browser (`src/lib/admin-client.ts`), otomatis redirect ke `/admin/login` kalau belum login atau token kedaluwarsa (401).
+- Approve/Reject di dashboard langsung memanggil endpoint `/api/admin/tenants/:id/approve` & `/api/admin/tenants/:id/reject` yang sudah dibangun di Fase 1 — tidak ada logic baru di backend, halaman ini murni UI di atas API yang sudah ada.
+- Tombol **Setujui** minta konfirmasi browser dulu (aksinya langsung mengaktifkan akun toko). Tombol **Tolak** membuka dialog untuk mengisi alasan (wajib diisi, ditampilkan ke pemilik toko saat mereka coba login).
+- Styling murni CSS custom di `src/app/admin/admin.css` (tanpa library UI eksternal) — badge status dibuat bergaya "cap stempel" (PENDING/DISETUJUI/DITOLAK) supaya jelas ini adalah halaman persetujuan dokumen/administrasi.
+- Modul **Langganan** (kelola paket & pembayaran subscription) sengaja belum dibuatkan halamannya — data `subscriptions` sudah ada di database sejak registrasi, tapi UI-nya menyusul setelah integrasi payment gateway.
+
+---
+
+## 9. Catatan Teknis Umum
 
 - Token access berisi `tenantId` + `role` — dipakai di modul Inventori/Penjualan/Akunting agar semua query otomatis `WHERE tenant_id = ...`. Pola untuk route baru:
   ```ts
@@ -219,3 +373,11 @@ curl "http://localhost:3000/api/stock-movements?productId=<PRODUCT_ID>" \
 - Untuk role-based access (misal kasir tidak boleh hapus produk), cek `user.role` di setiap route sebelum eksekusi.
 - Skema Prisma (`prisma/schema.prisma`) sudah mencakup seluruh modul (inventori, penjualan, akunting) sehingga tidak perlu migrasi ulang besar-besaran di fase depan — tinggal jalankan `prisma migrate dev` lagi jika ada penyesuaian kecil.
 - Ganti `SEED_SUPER_ADMIN_PASSWORD` di `.env` sebelum deploy ke production, lalu hapus/nonaktifkan skrip seed atau lindungi dengan env check.
+
+## 10. Sisa Roadmap
+
+Backend API (Fase 1–4) dan Admin Panel web (Fase 5) sudah lengkap. Yang belum dibangun:
+
+- **Fase 6** — Aplikasi mobile Flutter yang mengonsumsi seluruh API di atas + cetak struk Bluetooth
+- Integrasi payment gateway (Midtrans/Xendit) untuk tenant `SUBSCRIBE` + halaman kelola langganan di admin panel
+- Notifikasi email (register, approve, reject)
