@@ -1,44 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import jwt from "jsonwebtoken"; // atau sesuaikan dengan library JWT yang Anda pakai
 
 export async function POST(request: NextRequest) {
   try {
-    // Verifikasi admin token dari cookies
-    const cookieStore = cookies();
-    const adminToken = cookieStore.get("admin_token")?.value; // Sesuaikan dengan nama cookie Anda
-    
-    if (!adminToken) {
-      return NextResponse.json(
-        { error: "Unauthorized - No token provided" },
-        { status: 401 }
-      );
-    }
-
-    // Verifikasi JWT token
-    try {
-      const decoded = jwt.verify(
-        adminToken, 
-        process.env.JWT_SECRET || "your-secret-key" // Sesuaikan dengan secret key Anda
-      );
-      
-      // Optional: cek role admin
-      if ((decoded as any).role !== "ADMIN" && (decoded as any).role !== "SUPER_ADMIN") {
-        return NextResponse.json(
-          { error: "Forbidden - Admin access required" },
-          { status: 403 }
-        );
-      }
-    } catch (error) {
-      return NextResponse.json(
-        { error: "Unauthorized - Invalid token" },
-        { status: 401 }
-      );
-    }
-
     const body = await request.json();
     const { phone, message } = body;
 
+    console.log("📱 WhatsApp API called");
+    console.log("Phone:", phone);
+    console.log("Message:", message?.substring(0, 50) + "...");
+
+    // Validasi input
     if (!phone || !message) {
       return NextResponse.json(
         { error: "Phone dan message wajib diisi" },
@@ -48,11 +19,20 @@ export async function POST(request: NextRequest) {
 
     // Format nomor telepon
     let formattedPhone = phone.replace(/\D/g, '');
-    if (!formattedPhone.startsWith('62')) {
-      // Jika dimulai dengan 0, ganti dengan 62
+    
+    // Handle format nomor Indonesia
+    if (formattedPhone.startsWith('0')) {
       formattedPhone = '62' + formattedPhone.substring(1);
+    } else if (formattedPhone.startsWith('8')) {
+      formattedPhone = '62' + formattedPhone;
     }
-    formattedPhone = `${formattedPhone}@s.whatsapp.net`;
+    
+    // Tambahkan @s.whatsapp.net jika belum ada
+    if (!formattedPhone.includes('@s.whatsapp.net')) {
+      formattedPhone = `${formattedPhone}@s.whatsapp.net`;
+    }
+
+    console.log("Formatted phone:", formattedPhone);
 
     // Kirim ke WhatsApp server
     const whatsappResponse = await fetch('https://wa.sicerdiq.my.id/send/message', {
@@ -60,36 +40,26 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'X-Device-Id': '11722d7b-0836-477c-9800-cfc4a12f1731',
-        'Authorization': 'Basic ' + Buffer.from('admin:StrongPassword123!').toString('base64')
+        'Authorization': 'Basic ' + btoa('admin:StrongPassword123!')
       },
       body: JSON.stringify({
         phone: formattedPhone,
         message: message
-      }),
-      // @ts-ignore - untuk development dengan self-signed certificate
-      // Hapus di production!
-      ...(process.env.NODE_ENV === 'development' && {
-        agent: new (require('https').Agent)({
-          rejectUnauthorized: false
-        })
       })
     });
 
+    console.log("WhatsApp response status:", whatsappResponse.status);
+
     const result = await whatsappResponse.json();
+    console.log("WhatsApp response:", result);
 
     if (!whatsappResponse.ok) {
-      console.error('WhatsApp API Error:', {
-        status: whatsappResponse.status,
-        response: result
-      });
-      
       return NextResponse.json(
         { 
           error: "Gagal mengirim WhatsApp", 
-          details: result,
-          status: whatsappResponse.status
+          details: result 
         },
-        { status: 500 }
+        { status: whatsappResponse.status }
       );
     }
 
@@ -100,10 +70,21 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Send WhatsApp Error:', error);
+    console.error("❌ WhatsApp Error:", error);
     return NextResponse.json(
-      { error: "Internal server error", message: error instanceof Error ? error.message : "Unknown error" },
+      { 
+        error: "Internal server error",
+        message: error instanceof Error ? error.message : "Unknown error"
+      },
       { status: 500 }
     );
   }
+}
+
+// Optional: Handle method lain
+export async function GET() {
+  return NextResponse.json(
+    { message: "WhatsApp API endpoint ready" },
+    { status: 200 }
+  );
 }
