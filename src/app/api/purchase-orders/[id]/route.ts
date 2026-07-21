@@ -8,7 +8,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const po = await prisma.purchaseOrder.findFirst({
       where: { id: params.id, tenantId: user.tenantId },
-      include: { supplier: true, warehouse: true, items: { include: { product: true } } },
+      include: { supplier: true, warehouse: true, items: { include: { product: true } }, payments: { orderBy: { createdAt: "desc" } } },
     });
     if (!po) return NextResponse.json({ message: "Purchase order tidak ditemukan" }, { status: 404 });
 

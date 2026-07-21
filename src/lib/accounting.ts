@@ -146,25 +146,76 @@ export async function postSaleJournal(
 
 /**
  * Jurnal pembelian saat PO diterima (dipanggil dari POST /api/purchase-orders/:id/receive).
- *   Debit  Persediaan Barang = total PO
- *   Kredit Hutang Usaha      = total PO
+ * Akun kredit tergantung metode pembayaran yang dipilih saat PO dibuat:
+ *   - CASH     -> Debit Persediaan / Kredit Kas       (lunas seketika)
+ *   - TRANSFER -> Debit Persediaan / Kredit Bank      (lunas seketika)
+ *   - CREDIT   -> Debit Persediaan / Kredit Hutang Usaha (belum lunas / tempo)
  */
 export async function postPurchaseJournal(
   tx: TxClient,
-  params: { tenantId: string; poId: string; poNumber: string; entryDate: Date; total: number }
+  params: {
+    tenantId: string;
+    poId: string;
+    poNumber: string;
+    entryDate: Date;
+    total: number;
+    paymentMethod: "CASH" | "CREDIT" | "TRANSFER";
+  }
 ) {
-  const { tenantId, poId, poNumber, entryDate, total } = params;
+  const { tenantId, poId, poNumber, entryDate, total, paymentMethod } = params;
   if (total <= 0) return null;
+
+  const creditAccountCode =
+    paymentMethod === "CASH"
+      ? ACCOUNT_CODES.KAS
+      : paymentMethod === "TRANSFER"
+        ? ACCOUNT_CODES.BANK
+        : ACCOUNT_CODES.HUTANG_USAHA;
+
+  const methodLabel = paymentMethod === "CASH" ? "Tunai" : paymentMethod === "TRANSFER" ? "Transfer Bank" : "Tempo";
 
   return createJournalEntry(tx, {
     tenantId,
     entryDate,
     referenceType: "PURCHASE",
     referenceId: poId,
-    description: `Penerimaan barang PO ${poNumber}`,
+    description: `Penerimaan barang PO ${poNumber} (${methodLabel})`,
     lines: [
       { accountCode: ACCOUNT_CODES.PERSEDIAAN, debit: total },
-      { accountCode: ACCOUNT_CODES.HUTANG_USAHA, credit: total },
+      { accountCode: creditAccountCode, credit: total },
+    ],
+  });
+}
+
+/**
+ * Jurnal pelunasan hutang usaha dari pembelian tempo (dipanggil dari
+ * POST /api/purchase-orders/:id/payments).
+ *   Debit  Hutang Usaha = amount
+ *   Kredit Kas/Bank     = amount (tergantung metode pelunasan)
+ */
+export async function postPurchasePaymentJournal(
+  tx: TxClient,
+  params: {
+    tenantId: string;
+    poId: string;
+    poNumber: string;
+    entryDate: Date;
+    amount: number;
+    method: "CASH" | "TRANSFER";
+  }
+) {
+  const { tenantId, poId, poNumber, entryDate, amount, method } = params;
+  const debitCashOrBankCode = method === "CASH" ? ACCOUNT_CODES.KAS : ACCOUNT_CODES.BANK;
+
+  return createJournalEntry(tx, {
+    tenantId,
+    entryDate,
+    referenceType: "PURCHASE_PAYMENT",
+    referenceId: poId,
+    description: `Pelunasan hutang PO ${poNumber}`,
+    lines: [
+      { accountCode: ACCOUNT_CODES.HUTANG_USAHA, debit: amount },
+      { accountCode: debitCashOrBankCode, credit: amount },
     ],
   });
 }

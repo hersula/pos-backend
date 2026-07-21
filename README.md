@@ -158,8 +158,22 @@ Semua endpoint di bawah butuh header `Authorization: Bearer <accessToken>` milik
 | GET/POST | `/api/suppliers` | semua role / OWNER,MANAGER,GUDANG | List/tambah supplier |
 | PUT/DELETE | `/api/suppliers/:id` | OWNER, MANAGER, GUDANG (edit) / OWNER, MANAGER (delete) | Edit/hapus supplier |
 | GET/POST | `/api/purchase-orders` | semua role / OWNER,MANAGER,GUDANG | List/buat PO (status awal `DRAFT`, stok belum berubah) |
-| GET | `/api/purchase-orders/:id` | semua role | Detail PO |
-| POST | `/api/purchase-orders/:id/receive` | OWNER, MANAGER, GUDANG | Terima barang → stok bertambah + `costPrice` produk ter-update |
+| GET | `/api/purchase-orders/:id` | semua role | Detail PO + riwayat cicilan pelunasan hutang |
+| POST | `/api/purchase-orders/:id/receive` | OWNER, MANAGER, GUDANG | Terima barang → stok bertambah + `costPrice` produk ter-update + tentukan lunas/hutang sesuai metode bayar |
+| GET/POST | `/api/purchase-orders/:id/payments` | semua role / OWNER,MANAGER,AKUNTAN | Riwayat / catat pelunasan hutang usaha (khusus PO metode `CREDIT`) |
+| GET | `/api/reports/purchases-summary?dateFrom=&dateTo=` | OWNER,MANAGER,GUDANG,AKUNTAN | Ringkasan pembelian per metode bayar + daftar hutang usaha belum lunas |
+
+### Metode Pembayaran Pengadaan Barang
+
+Setiap PO punya `paymentMethod` yang ditentukan saat dibuat (`POST /api/purchase-orders`), berpengaruh ke jurnal akunting saat barang diterima:
+
+| `paymentMethod` | Label | Perilaku saat `/receive` |
+|---|---|---|
+| `CASH` | Tunai | Langsung lunas — jurnal Debit Persediaan / Kredit **Kas** |
+| `TRANSFER` | Transfer Bank | Langsung lunas — jurnal Debit Persediaan / Kredit **Bank** |
+| `CREDIT` | Tempo | Jadi hutang (`paymentStatus: UNPAID`) — jurnal Debit Persediaan / Kredit **Hutang Usaha**, dilunasi belakangan lewat `/payments` |
+
+`paymentStatus` (`UNPAID`/`PARTIAL`/`PAID`) dan `paidAmount` otomatis ter-update setiap kali endpoint `/payments` dipanggil, sampai lunas penuh.
 
 ### Contoh alur testing
 
@@ -183,21 +197,30 @@ curl -X POST http://localhost:3000/api/products \
     "initialStock": { "warehouseId": "<WAREHOUSE_ID>", "quantity": 50 }
   }'
 
-# 3. Buat PO pembelian ke supplier
+# 3. Buat PO pembelian ke supplier secara TEMPO (hutang)
 curl -X POST http://localhost:3000/api/purchase-orders \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -d '{
     "warehouseId": "<WAREHOUSE_ID>",
+    "paymentMethod": "CREDIT",
     "items": [ { "productId": "<PRODUCT_ID>", "qty": 100, "unitCost": 3800 } ]
   }'
 
-# 4. Terima barang PO -> stok otomatis bertambah 100
+# 4. Terima barang PO -> stok otomatis bertambah 100, status hutang UNPAID
 curl -X POST http://localhost:3000/api/purchase-orders/<PO_ID>/receive \
   -H "Authorization: Bearer $TOKEN"
 
-# 5. Cek kartu stok
+# 5. Cicil pelunasan hutang
+curl -X POST http://localhost:3000/api/purchase-orders/<PO_ID>/payments \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "method": "TRANSFER", "amount": 200000, "referenceNo": "TRF001" }'
+
+# 6. Cek kartu stok
 curl "http://localhost:3000/api/stock-movements?productId=<PRODUCT_ID>" \
   -H "Authorization: Bearer $TOKEN"
+
+# 7. Ringkasan pembelian & hutang usaha bulan ini
+curl "http://localhost:3000/api/reports/purchases-summary" -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Desain penting
@@ -206,6 +229,7 @@ curl "http://localhost:3000/api/stock-movements?productId=<PRODUCT_ID>" \
 - Produk **tidak pernah dihapus permanen** (`DELETE /api/products/:id` hanya set `isActive: false`) supaya data transaksi lama tetap valid secara referensial.
 - Purchase Order berstatus `DRAFT` **tidak mengubah stok** — stok baru bertambah saat endpoint `/receive` dipanggil. Ini meniru proses nyata: PO dibuat dulu, barang fisik baru masuk gudang belakangan.
 - `costPrice` produk otomatis mengikuti harga beli PO terakhir (metode "harga beli terbaru"), dipakai nanti untuk hitung HPP di modul Akunting.
+- Pelunasan hutang (`/payments`) memvalidasi jumlah bayar tidak boleh melebihi sisa hutang, dan menolak kalau PO bukan `CREDIT` atau sudah `PAID` — konsisten dengan pola validasi pelunasan piutang di modul Penjualan.
 
 ---
 
@@ -294,7 +318,8 @@ Prinsip: **tidak ada input jurnal manual untuk transaksi operasional** — jurna
 | GET | `/api/accounting/ledger?accountId=&dateFrom=&dateTo=` | OWNER, MANAGER, AKUNTAN | Buku besar per akun, lengkap saldo berjalan |
 | GET/POST | `/api/expenses` | semua role / OWNER,MANAGER,AKUNTAN | List/catat beban operasional (auto-jurnal) |
 | DELETE | `/api/expenses/:id` | OWNER, MANAGER, AKUNTAN | Hapus beban → otomatis buat jurnal balik |
-| GET | `/api/reports/profit-loss?dateFrom=&dateTo=` | OWNER, MANAGER, AKUNTAN | Laporan Laba Rugi: Pendapatan − HPP = Laba Kotor − Beban Operasional = Laba Bersih |
+| GET | `/api/reports/profit-loss?dateFrom=&dateTo=` | OWNER, MANAGER, AKUNTAN | Laporan Laba Rugi: Pendapatan − HPP = Laba Kotor − Beban Operasional = Laba Bersih, plus `additionalInfo` (total pembelian periode & saldo hutang usaha berjalan — informasi konteks, bukan pengurang laba) |
+| GET | `/api/reports/purchases-summary?dateFrom=&dateTo=` | OWNER,MANAGER,GUDANG,AKUNTAN | Ringkasan pembelian per metode bayar + daftar hutang usaha belum lunas |
 
 ### Kapan jurnal otomatis dibuat
 
@@ -302,9 +327,12 @@ Prinsip: **tidak ada input jurnal manual untuk transaksi operasional** — jurna
 |---|---|
 | `POST /api/sales` (transaksi baru) | Debit Kas/Bank (+Piutang jika `PARTIAL`) — Kredit Pendapatan & PPN Keluaran, plus Debit HPP — Kredit Persediaan sebesar harga modal barang terjual |
 | `POST /api/sales/:id/cancel` | Jurnal balik (reversing entry) otomatis dari jurnal penjualan asal |
-| `POST /api/purchase-orders/:id/receive` | Debit Persediaan Barang — Kredit Hutang Usaha sebesar total PO |
+| `POST /api/purchase-orders/:id/receive` | Debit Persediaan Barang — Kredit **Kas** (metode `CASH`) / **Bank** (`TRANSFER`) / **Hutang Usaha** (`CREDIT`), sebesar total PO |
+| `POST /api/purchase-orders/:id/payments` | Debit Hutang Usaha — Kredit Kas/Bank, sebesar cicilan yang dibayar (khusus PO metode `CREDIT`) |
 | `POST /api/expenses` | Debit Beban Operasional — Kredit Kas |
 | `DELETE /api/expenses/:id` | Jurnal balik otomatis dari jurnal beban asal |
+
+> **Kenapa pembelian tidak muncul sebagai beban di Laba Rugi?** Karena secara akuntansi, barang yang dibeli awalnya menambah **aset** (Persediaan), bukan langsung jadi beban — baru berubah jadi HPP (beban) saat barang itu **terjual**. Ini prinsip standar (matching principle). Karena itu modul Pengadaan Barang "masuk" ke laporan akunting lewat: (1) jurnal otomatis yang tercatat di Jurnal Umum & Buku Besar seperti transaksi lain, dan (2) field `additionalInfo` di laporan Laba Rugi serta endpoint `purchases-summary` khusus — sebagai informasi pelengkap, tanpa mendistorsi angka laba yang sebenarnya.
 
 Semua ini terjadi **di dalam `prisma.$transaction` yang sama** dengan aksi utamanya (lihat `src/lib/accounting.ts`), jadi tidak mungkin ada transaksi penjualan yang tersimpan tanpa jurnalnya, atau sebaliknya.
 
@@ -326,8 +354,11 @@ curl "http://localhost:3000/api/accounting/journal?dateFrom=2026-07-01&dateTo=20
 curl "http://localhost:3000/api/accounting/ledger?accountId=<ACCOUNT_ID_KAS>" \
   -H "Authorization: Bearer $TOKEN"
 
-# Laporan laba rugi bulan berjalan
+# Laporan laba rugi bulan berjalan (sudah termasuk additionalInfo pembelian & hutang usaha)
 curl "http://localhost:3000/api/reports/profit-loss" -H "Authorization: Bearer $TOKEN"
+
+# Ringkasan pembelian & hutang usaha
+curl "http://localhost:3000/api/reports/purchases-summary" -H "Authorization: Bearer $TOKEN"
 ```
 
 ### Desain penting
@@ -373,6 +404,7 @@ npm run dev
 - Untuk role-based access (misal kasir tidak boleh hapus produk), cek `user.role` di setiap route sebelum eksekusi.
 - Skema Prisma (`prisma/schema.prisma`) sudah mencakup seluruh modul (inventori, penjualan, akunting) sehingga tidak perlu migrasi ulang besar-besaran di fase depan — tinggal jalankan `prisma migrate dev` lagi jika ada penyesuaian kecil.
 - Ganti `SEED_SUPER_ADMIN_PASSWORD` di `.env` sebelum deploy ke production, lalu hapus/nonaktifkan skrip seed atau lindungi dengan env check.
+- Sebelum `npm run build` / `npm run dev`, pastikan `npx prisma generate` sukses dulu (otomatis jalan lewat `npm install`, tapi jalankan manual kalau ada perubahan di `schema.prisma`). Tanpa ini, TypeScript akan error karena tipe seperti `Prisma.SaleWhereInput` belum ter-generate.
 
 ## 10. Sisa Roadmap
 

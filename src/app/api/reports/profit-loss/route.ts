@@ -54,6 +54,30 @@ export async function GET(req: NextRequest) {
     const totalOperatingExpenses = round2(operatingExpenses.reduce((s, a) => s + a.amount, 0));
     const netProfit = round2(grossProfit - totalOperatingExpenses);
 
+    // ---- Info tambahan (di luar perhitungan laba-rugi, murni untuk konteks) ----
+    // Pembelian/pengadaan barang TIDAK masuk sebagai beban di laba-rugi (itu tercatat sebagai
+    // Persediaan/aset, baru jadi HPP saat barang terjual) — di sini hanya ditampilkan sebagai
+    // informasi arus pembelian & posisi hutang usaha, bukan pengurang laba.
+    const purchaseOrdersInPeriod = await prisma.purchaseOrder.findMany({
+      where: { tenantId: user.tenantId, status: "RECEIVED", createdAt: { gte: dateFrom, lte: dateTo } },
+      select: { total: true },
+    });
+    const totalPurchasesInPeriod = round2(purchaseOrdersInPeriod.reduce((s, po) => s + Number(po.total), 0));
+
+    const unpaidCreditOrders = await prisma.purchaseOrder.findMany({
+      where: {
+        tenantId: user.tenantId,
+        status: "RECEIVED",
+        paymentMethod: "CREDIT",
+        paymentStatus: { in: ["UNPAID", "PARTIAL"] },
+        createdAt: { lte: dateTo },
+      },
+      select: { total: true, paidAmount: true },
+    });
+    const accountsPayableBalance = round2(
+      unpaidCreditOrders.reduce((s, po) => s + (Number(po.total) - Number(po.paidAmount)), 0)
+    );
+
     return NextResponse.json({
       period: { from: dateFrom.toISOString(), to: dateTo.toISOString() },
       revenue: { accounts: revenueAccounts.map(round2Account), total: totalRevenue },
@@ -61,6 +85,10 @@ export async function GET(req: NextRequest) {
       grossProfit,
       operatingExpenses: { accounts: operatingExpenses.map(round2Account), total: totalOperatingExpenses },
       netProfit,
+      additionalInfo: {
+        totalPurchasesInPeriod,
+        accountsPayableBalance,
+      },
     });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });

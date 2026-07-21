@@ -45,15 +45,26 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         });
       }
 
-      await tx.purchaseOrder.update({ where: { id: po.id }, data: { status: "RECEIVED" } });
+      // CASH/TRANSFER dianggap lunas seketika saat barang diterima; CREDIT (tempo) jadi hutang usaha
+      const isPaidImmediately = po.paymentMethod === "CASH" || po.paymentMethod === "TRANSFER";
 
-      // Jurnal akunting otomatis: Debit Persediaan, Kredit Hutang Usaha
+      await tx.purchaseOrder.update({
+        where: { id: po.id },
+        data: {
+          status: "RECEIVED",
+          paymentStatus: isPaidImmediately ? "PAID" : "UNPAID",
+          paidAmount: isPaidImmediately ? po.total : 0,
+        },
+      });
+
+      // Jurnal akunting otomatis: Debit Persediaan, Kredit Kas/Bank/Hutang Usaha (tergantung metode bayar)
       await postPurchaseJournal(tx, {
         tenantId: user.tenantId,
         poId: po.id,
         poNumber: po.poNumber,
         entryDate: new Date(),
         total: Number(po.total),
+        paymentMethod: po.paymentMethod,
       });
     });
 

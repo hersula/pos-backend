@@ -32,6 +32,7 @@ const itemSchema = z.object({
 const createSchema = z.object({
   supplierId: z.string().optional(),
   warehouseId: z.string(),
+  paymentMethod: z.enum(["CASH", "CREDIT", "TRANSFER"]).default("CASH"),
   items: z.array(itemSchema).min(1, "Minimal 1 item pembelian"),
 });
 
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ message: "Data tidak valid", errors: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
-    const { supplierId, warehouseId, items } = parsed.data;
+    const { supplierId, warehouseId, paymentMethod, items } = parsed.data;
 
     const warehouse = await prisma.warehouse.findFirst({ where: { id: warehouseId, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang tidak ditemukan" }, { status: 404 });
@@ -60,6 +61,7 @@ export async function POST(req: NextRequest) {
         poNumber,
         status: "DRAFT",
         total,
+        paymentMethod,
         createdBy: user.userId,
         items: {
           create: items.map((it) => ({

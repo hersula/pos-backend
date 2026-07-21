@@ -247,23 +247,52 @@ enum PurchaseOrderStatus {
   CANCELLED
 }
 
+enum PurchasePaymentMethod {
+  CASH      // Tunai
+  CREDIT    // Tempo (hutang usaha)
+  TRANSFER  // Transfer Bank
+}
+
+enum PurchasePaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
 model PurchaseOrder {
-  id          String              @id @default(uuid())
-  tenantId    String              @map("tenant_id")
-  supplierId  String?             @map("supplier_id")
-  warehouseId String              @map("warehouse_id")
-  poNumber    String              @map("po_number")
-  status      PurchaseOrderStatus @default(DRAFT)
-  total       Decimal             @default(0) @db.Decimal(14, 2)
-  createdBy   String?             @map("created_by")
-  createdAt   DateTime            @default(now()) @map("created_at")
+  id            String                @id @default(uuid())
+  tenantId      String                @map("tenant_id")
+  supplierId    String?               @map("supplier_id")
+  warehouseId   String                @map("warehouse_id")
+  poNumber      String                @map("po_number")
+  status        PurchaseOrderStatus   @default(DRAFT)
+  total         Decimal               @default(0) @db.Decimal(14, 2)
+  paymentMethod PurchasePaymentMethod @default(CASH) @map("payment_method")
+  paymentStatus PurchasePaymentStatus @default(UNPAID) @map("payment_status")
+  paidAmount    Decimal               @default(0) @map("paid_amount") @db.Decimal(14, 2)
+  createdBy     String?               @map("created_by")
+  createdAt     DateTime              @default(now()) @map("created_at")
 
   supplier Supplier?          @relation(fields: [supplierId], references: [id])
   warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
   items    PurchaseOrderItem[]
+  payments PurchasePayment[]
 
   @@unique([tenantId, poNumber])
   @@map("purchase_orders")
+}
+
+model PurchasePayment {
+  id              String                @id @default(uuid())
+  purchaseOrderId String                @map("purchase_order_id")
+  method          PurchasePaymentMethod
+  amount          Decimal               @db.Decimal(14, 2)
+  referenceNo     String?               @map("reference_no")
+  createdAt       DateTime              @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+
+  @@map("purchase_payments")
 }
 
 model PurchaseOrderItem {
