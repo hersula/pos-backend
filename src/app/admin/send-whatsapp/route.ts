@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
+  console.log("📱 WhatsApp API route called");
+  
   try {
     const body = await request.json();
     const { phone, message } = body;
 
-    console.log("📱 WhatsApp API called");
     console.log("Phone:", phone);
-    console.log("Message:", message?.substring(0, 50) + "...");
+    console.log("Message:", message?.substring(0, 50));
 
     // Validasi input
     if (!phone || !message) {
@@ -32,7 +33,8 @@ export async function POST(request: NextRequest) {
       formattedPhone = `${formattedPhone}@s.whatsapp.net`;
     }
 
-    console.log("Formatted phone:", formattedPhone);
+    console.log("📱 Formatted phone:", formattedPhone);
+    console.log("📱 Message length:", message.length);
 
     // Kirim ke WhatsApp server
     const whatsappResponse = await fetch('https://wa.sicerdiq.my.id/send/message', {
@@ -40,7 +42,7 @@ export async function POST(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
         'X-Device-Id': '11722d7b-0836-477c-9800-cfc4a12f1731',
-        'Authorization': 'Basic ' + btoa('admin:StrongPassword123!')
+        'Authorization': 'Basic ' + Buffer.from('admin:StrongPassword123!').toString('base64')
       },
       body: JSON.stringify({
         phone: formattedPhone,
@@ -48,14 +50,16 @@ export async function POST(request: NextRequest) {
       })
     });
 
-    console.log("WhatsApp response status:", whatsappResponse.status);
+    console.log("📱 WhatsApp server response status:", whatsappResponse.status);
 
     const result = await whatsappResponse.json();
-    console.log("WhatsApp response:", result);
+    console.log("📱 WhatsApp server response:", result);
 
     if (!whatsappResponse.ok) {
+      console.error('❌ WhatsApp API Error:', result);
       return NextResponse.json(
         { 
+          success: false,
           error: "Gagal mengirim WhatsApp", 
           details: result 
         },
@@ -70,9 +74,10 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error("❌ WhatsApp Error:", error);
+    console.error('❌ Send WhatsApp Error:', error);
     return NextResponse.json(
       { 
+        success: false,
         error: "Internal server error",
         message: error instanceof Error ? error.message : "Unknown error"
       },
@@ -81,10 +86,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Optional: Handle method lain
+// Test endpoint
 export async function GET() {
-  return NextResponse.json(
-    { message: "WhatsApp API endpoint ready" },
-    { status: 200 }
-  );
+  return NextResponse.json({ 
+    message: "WhatsApp API endpoint is ready!",
+    path: "src/app/api/admin/send-whatsapp/route.ts"
+  });
 }
