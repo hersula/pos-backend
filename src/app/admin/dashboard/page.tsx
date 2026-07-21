@@ -114,12 +114,31 @@ export default function AdminDashboardPage() {
     });
   }, [tenants, activeTab, search]);
 
+  async function sendWhatsAppNotification(phone: string, message: string) {
+    try {
+      const response = await adminFetch("/api/admin/send-whatsapp", {
+        method: "POST",
+        body: JSON.stringify({ phone, message }),
+      });
+      return response;
+    } catch (error) {
+      console.error("Gagal kirim WhatsApp:", error);
+      // Tidak throw error agar proses utama tetap berjalan
+      return null;
+    }
+  }
+
   async function handleApprove(tenant: Tenant) {
     if (!window.confirm(`Setujui pendaftaran "${tenant.businessName}"? Toko akan langsung bisa login.`)) return;
     setBusyId(tenant.id);
     try {
       await adminFetch(`/api/admin/tenants/${tenant.id}/approve`, { method: "POST" });
       setToast({ type: "success", message: `${tenant.businessName} berhasil disetujui.` });
+      // Kirim WhatsApp notifikasi APPROVE
+      if (tenant.phone) {
+        const waMessage = `Halo ${tenant.ownerName},\n\nPendaftaran toko "${tenant.businessName}" telah DISETUJUI. ✅\n\nAkun Anda sudah aktif dan bisa langsung login ke aplikasi.\n\nTerima kasih telah bergabung!\n\n- Admin`;
+        await sendWhatsAppNotification(tenant.phone, waMessage);
+      }
       await loadTenants();
     } catch (err) {
       setToast({ type: "error", message: err instanceof AdminApiError ? err.message : "Gagal menyetujui tenant" });
@@ -142,6 +161,14 @@ export default function AdminDashboardPage() {
         body: JSON.stringify({ reason: rejectReason.trim() }),
       });
       setToast({ type: "success", message: `${rejectTarget.businessName} ditolak.` });
+
+      // Kirim WhatsApp notifikasi REJECT
+      if (rejectTarget.phone) {
+        const waMessage = `Halo ${rejectTarget.ownerName},\n\nPendaftaran toko "${rejectTarget.businessName}" DITOLAK. ❌\n\nAlasan: ${rejectReason.trim()}\n\nSilakan perbaiki data pendaftaran Anda atau hubungi admin untuk informasi lebih lanjut.\n\n- Admin`;
+        
+        await sendWhatsAppNotification(rejectTarget.phone, waMessage);
+      }
+
       setRejectTarget(null);
       await loadTenants();
     } catch (err) {
