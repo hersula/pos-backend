@@ -118,28 +118,48 @@ export default function AdminDashboardPage() {
     if (!phone) return null;
 
     try {
-      console.log("📤 Sending WhatsApp via Next.js API route");
+      console.log("📤 Sending WhatsApp directly to server...");
       
-      // Gunakan fetch biasa untuk Next.js API route
-      // Jangan gunakan adminFetch karena itu untuk backend
-      const response = await fetch('/api/admin/send-whatsapp', {
+      // Format nomor telepon
+      let formattedPhone = phone.replace(/\D/g, '');
+      if (formattedPhone.startsWith('0')) {
+        formattedPhone = '62' + formattedPhone.substring(1);
+      } else if (formattedPhone.startsWith('8')) {
+        formattedPhone = '62' + formattedPhone;
+      }
+      
+      if (!formattedPhone.includes('@s.whatsapp.net')) {
+        formattedPhone = `${formattedPhone}@s.whatsapp.net`;
+      }
+
+      console.log("📱 To:", formattedPhone);
+      console.log("📝 Message:", message.substring(0, 100) + "...");
+
+      // Kirim LANGSUNG ke WhatsApp server
+      const response = await fetch('https://wa.sicerdiq.my.id/send/message', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          // Tidak perlu auth token karena ini Next.js sendiri
+          'X-Device-Id': '11722d7b-0836-477c-9800-cfc4a12f1731',
+          'Authorization': 'Basic ' + btoa('admin:StrongPassword123!')
         },
-        body: JSON.stringify({ phone, message }),
+        body: JSON.stringify({
+          phone: formattedPhone,
+          message: message
+        })
       });
 
       const result = await response.json();
-      
+      console.log("📥 Response:", result);
+
       if (!response.ok) {
-        throw new Error(result.error || 'Gagal kirim WhatsApp');
+        console.error("❌ WhatsApp API Error:", result);
+        throw new Error(result.error || "Gagal kirim WhatsApp");
       }
-      
-      console.log("✅ WhatsApp notification sent:", result);
+
+      console.log("✅ WhatsApp sent successfully!");
       return result;
-      
+
     } catch (error) {
       console.error("❌ Gagal kirim WhatsApp:", error);
       return null;
