@@ -41,7 +41,7 @@ export async function POST(request: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Device-Id': '11722d7b-0836-477c-9800-cfc4a12f1731',
+        'X-Device-Id': '12722d7b-0836-477c-9800-cfc4a12f1731',
         'Authorization': 'Basic ' + Buffer.from('admin:StrongPassword123!').toString('base64')
       },
       body: JSON.stringify({
