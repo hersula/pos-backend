@@ -21,6 +21,8 @@ npm install
 # 2. Copy env & sesuaikan
 cp .env.example .env
 # edit DATABASE_URL, JWT_ACCESS_SECRET, JWT_REFRESH_SECRET
+# (opsional) edit WHATSAPP_* kalau mau notifikasi WA langsung aktif dari awal —
+# kalau dilewati, isi manual belakangan lewat Admin Panel > Pengaturan
 
 # 3. Buat database MySQL kosong terlebih dahulu, misal:
 #    CREATE DATABASE pos_saas;
@@ -244,7 +246,7 @@ curl "http://localhost:3000/api/reports/purchases-summary" -H "Authorization: Be
 | POST | `/api/sales/:id/payments` | OWNER, MANAGER, KASIR | Tambah pembayaran susulan (pelunasan status `PARTIAL`) |
 | GET/POST | `/api/customers` | semua role | List/tambah pelanggan |
 | PUT/DELETE | `/api/customers/:id` | semua role | Edit/hapus pelanggan |
-| GET | `/api/reports/sales-summary?dateFrom=&dateTo=&warehouseId=&cashierId=` | semua role | Ringkasan tutup kasir: omzet, diskon, PPN, rekap per metode bayar |
+| GET | `/api/reports/sales-summary?dateFrom=&dateTo=&warehouseId=&cashierId=` | semua role | Ringkasan tutup kasir: omzet, diskon, PPN, jumlah item terjual, produk terlaris, rekap per metode bayar |
 
 ### Body `POST /api/sales`
 
@@ -302,7 +304,7 @@ curl "http://localhost:3000/api/reports/sales-summary" -H "Authorization: Bearer
 - **`src/lib/sales.ts`** — `calculateSaleTotals()` (rumus subtotal → diskon → PPN → grand total, dipakai backend agar frontend tidak perlu dipercaya untuk hitung total) dan `generateInvoiceNumber()` (format `INV-YYYYMMDD-0001`, sequence per tenant per hari).
 - Pengurangan stok memakai `adjustStock()` yang sama dari modul Inventori (`referenceType: 'SALE'`), sehingga kartu stok (`/api/stock-movements`) otomatis mencatat histori penjualan juga.
 - Pembatalan transaksi mengembalikan stok dengan `allowNegative: true` supaya tetap bisa dibatalkan meski produk sudah diubah/dinonaktifkan setelahnya.
-- Endpoint `sales-summary` dirancang untuk fitur "Tutup Kasir" di Flutter — kasir bisa mencocokkan uang cash fisik & mutasi QRIS/EDC terhadap rekap `byPaymentMethod`.
+- Endpoint `sales-summary` dirancang untuk fitur "Tutup Kasir" di Flutter — kasir bisa mencocokkan uang cash fisik & mutasi QRIS/EDC terhadap rekap `byPaymentMethod`, plus `totalItemsSold` (total qty semua item terjual) dan `topProducts` (5 produk terlaris berdasarkan qty, dihitung dari data `items` yang sudah di-`include` sekalian — tidak nambah query terpisah).
 
 ---
 
@@ -379,6 +381,7 @@ Halaman web untuk tim platform meninjau & menyetujui/menolak pendaftaran tenant 
 |---|---|---|
 | Login | `/admin/login` | Login super admin (pakai akun dari `npm run seed`) |
 | Dashboard | `/admin/dashboard` | Tabel tenant dengan filter status, pencarian, tombol Setujui/Tolak, dan ringkasan jumlah per status |
+| Pengaturan | `/admin/settings` | Atur Device ID gateway WhatsApp + tombol kirim pesan test (khusus Super Admin untuk simpan) |
 
 Cara pakai:
 ```bash
@@ -391,6 +394,28 @@ npm run dev
 - Tombol **Setujui** minta konfirmasi browser dulu (aksinya langsung mengaktifkan akun toko). Tombol **Tolak** membuka dialog untuk mengisi alasan (wajib diisi, ditampilkan ke pemilik toko saat mereka coba login).
 - Styling murni CSS custom di `src/app/admin/admin.css` (tanpa library UI eksternal) — badge status dibuat bergaya "cap stempel" (PENDING/DISETUJUI/DITOLAK) supaya jelas ini adalah halaman persetujuan dokumen/administrasi.
 - Modul **Langganan** (kelola paket & pembayaran subscription) sengaja belum dibuatkan halamannya — data `subscriptions` sudah ada di database sejak registrasi, tapi UI-nya menyusul setelah integrasi payment gateway.
+
+### Notifikasi WhatsApp (approve/tolak tenant)
+
+Setiap kali tenant di-approve atau ditolak, backend otomatis mengirim pesan WhatsApp ke `tenant.phone` lewat gateway eksternal (`src/lib/whatsapp.ts`).
+
+| Endpoint | Role | Deskripsi |
+|---|---|---|
+| `GET /api/admin/settings/whatsapp` | Admin (semua role) | Lihat pengaturan saat ini (`deviceId`, `enabled`, sumber `deviceId` dari database/env) |
+| `PUT /api/admin/settings/whatsapp` | Super Admin only | Ubah Device ID / aktif-nonaktifkan, opsional sekalian kirim pesan test (`testPhone`) |
+
+**Kenapa Device ID bisa diganti tanpa redeploy:** `WHATSAPP_DEVICE_ID` di `.env` cuma jadi *default awal*. Begitu Super Admin menyimpan Device ID baru lewat halaman `/admin/settings`, nilainya disimpan di tabel `platform_settings` (key-value generik, `prisma/schema.prisma` model `PlatformSetting`) dan **selalu diprioritaskan** di atas nilai `.env`. Ini dipakai supaya kalau device WhatsApp gateway-nya diganti (device baru, session logout, dsb), admin platform bisa update sendiri tanpa perlu minta developer redeploy.
+
+Variabel lain (`WHATSAPP_API_URL`, `WHATSAPP_AUTH_USERNAME`, `WHATSAPP_AUTH_PASSWORD`) sengaja **tetap** hanya lewat `.env` (bukan diedit lewat UI) karena ini kredensial sensitif — beda dari Device ID yang lebih sering berubah dan tidak serahasia itu.
+
+Pengiriman WhatsApp bersifat **non-blocking**: dipanggil tanpa `await` penuh (`.catch(...)` saja) supaya kegagalan gateway (mati, salah device ID, dll) tidak menggagalkan proses approve/reject itu sendiri — cukup di-log ke console server.
+
+```bash
+# Contoh: ubah Device ID & langsung test kirim
+curl -X PUT http://localhost:3000/api/admin/settings/whatsapp \
+  -H "Authorization: Bearer <ACCESS_TOKEN_SUPER_ADMIN>" -H "Content-Type: application/json" \
+  -d '{ "deviceId": "device-baru-xxxx", "enabled": true, "testPhone": "08123456789" }'
+```
 
 ---
 
@@ -412,4 +437,4 @@ Backend API (Fase 1–4) dan Admin Panel web (Fase 5) sudah lengkap. Yang belum 
 
 - **Fase 6** — Aplikasi mobile Flutter yang mengonsumsi seluruh API di atas + cetak struk Bluetooth
 - Integrasi payment gateway (Midtrans/Xendit) untuk tenant `SUBSCRIBE` + halaman kelola langganan di admin panel
-- Notifikasi email (register, approve, reject)
+- ~~Notifikasi email~~ — sudah diganti notifikasi **WhatsApp** (lihat bagian Admin Panel di atas), lebih relevan untuk target pengguna UMKM

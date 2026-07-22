@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getAdminFromRequest, AuthError } from "@/lib/auth";
+import { sendWhatsappMessage, tenantRejectedMessage } from "@/lib/whatsapp";
 
 const schema = z.object({
   reason: z.string().min(3, "Alasan penolakan wajib diisi"),
@@ -26,7 +27,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       data: { status: "REJECTED", rejectedReason: parsed.data.reason },
     });
 
-    // TODO: kirim email pemberitahuan penolakan ke pemilik toko
+    // Kirim notifikasi WhatsApp ke pemilik toko (tidak menggagalkan response kalau gagal terkirim)
+    if (updated.phone) {
+      sendWhatsappMessage(
+        updated.phone,
+        tenantRejectedMessage({ ownerName: updated.ownerName, businessName: updated.businessName, reason: parsed.data.reason })
+      ).catch((err) => console.error("Gagal kirim WhatsApp reject:", err));
+    }
 
     return NextResponse.json({
       message: `Tenant "${updated.businessName}" ditolak.`,

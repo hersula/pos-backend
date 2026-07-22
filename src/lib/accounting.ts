@@ -113,8 +113,27 @@ export async function postSaleJournal(
   const lines: JournalLineInput[] = [];
 
   // Debit Kas untuk pembayaran CASH, Debit Bank untuk metode non-tunai (digabung 1 akun demi kesederhanaan)
-  const cashTotal = round2(payments.filter((p) => p.method === "CASH").reduce((s, p) => s + p.amount, 0));
-  const bankTotal = round2(payments.filter((p) => p.method !== "CASH").reduce((s, p) => s + p.amount, 0));
+  let cashTotal = round2(payments.filter((p) => p.method === "CASH").reduce((s, p) => s + p.amount, 0));
+  let bankTotal = round2(payments.filter((p) => p.method !== "CASH").reduce((s, p) => s + p.amount, 0));
+
+  // PENTING: kalau pelanggan bayar lebih dari total tagihan (ada kembalian), uang yang
+  // benar-benar "masuk" ke kas toko cuma sebesar grandTotal — sisanya dikembalikan tunai
+  // ke pelanggan. Tanpa penyesuaian ini, sisi debit (kas) akan lebih besar dari sisi
+  // kredit (pendapatan) sebesar kembalian, dan jurnal jadi tidak balance (error 500).
+  // Kembalian diasumsikan selalu diambil dari uang tunai di laci kasir, baru dari
+  // pembayaran non-tunai kalau tunai saja tidak cukup (kasus langka).
+  let changeAmount = round2(paidTotal - grandTotal);
+  if (changeAmount > 0) {
+    const deductFromCash = Math.min(cashTotal, changeAmount);
+    cashTotal = round2(cashTotal - deductFromCash);
+    changeAmount = round2(changeAmount - deductFromCash);
+
+    if (changeAmount > 0) {
+      const deductFromBank = Math.min(bankTotal, changeAmount);
+      bankTotal = round2(bankTotal - deductFromBank);
+      changeAmount = round2(changeAmount - deductFromBank);
+    }
+  }
 
   if (cashTotal > 0) lines.push({ accountCode: ACCOUNT_CODES.KAS, debit: cashTotal });
   if (bankTotal > 0) lines.push({ accountCode: ACCOUNT_CODES.BANK, debit: bankTotal });

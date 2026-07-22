@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { getAdminFromRequest, AuthError } from "@/lib/auth";
 import { ACCOUNT_CODES } from "@/lib/accounting";
+import { sendWhatsappMessage, tenantApprovedMessage } from "@/lib/whatsapp";
 
 // Chart of accounts default yang otomatis dibuat saat tenant di-approve
 const DEFAULT_ACCOUNTS = [
@@ -66,7 +67,13 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return approvedTenant;
     });
 
-    // TODO: kirim email aktivasi ke pemilik toko
+    // Kirim notifikasi WhatsApp ke pemilik toko (tidak menggagalkan response kalau gagal terkirim)
+    if (updated.phone) {
+      sendWhatsappMessage(
+        updated.phone,
+        tenantApprovedMessage({ ownerName: updated.ownerName, businessName: updated.businessName, email: updated.email })
+      ).catch((err) => console.error("Gagal kirim WhatsApp approve:", err));
+    }
 
     return NextResponse.json({
       message: `Tenant "${updated.businessName}" berhasil di-approve.`,

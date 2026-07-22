@@ -114,77 +114,12 @@ export default function AdminDashboardPage() {
     });
   }, [tenants, activeTab, search]);
 
-  async function sendWhatsAppNotification(phone: string, message: string) {
-    if (!phone) return null;
-
-    try {
-      console.log("📤 Sending WhatsApp directly to server...");
-      
-      // Format nomor telepon
-      let formattedPhone = phone.replace(/\D/g, '');
-      if (formattedPhone.startsWith('0')) {
-        formattedPhone = '62' + formattedPhone.substring(1);
-      } else if (formattedPhone.startsWith('8')) {
-        formattedPhone = '62' + formattedPhone;
-      }
-      
-      if (!formattedPhone.includes('@s.whatsapp.net')) {
-        formattedPhone = `${formattedPhone}@s.whatsapp.net`;
-      }
-
-      console.log("📱 To:", formattedPhone);
-      console.log("📝 Message:", message.substring(0, 100) + "...");
-
-      // Kirim LANGSUNG ke WhatsApp server
-      const response = await fetch('https://wa.sicerdiq.my.id/send/message', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Device-Id': '11722d7b-0836-477c-9800-cfc4a12f1731',
-          'Authorization': 'Basic ' + btoa('admin:StrongPassword123!')
-        },
-        body: JSON.stringify({
-          phone: formattedPhone,
-          message: message
-        })
-      });
-
-      const result = await response.json();
-      console.log("📥 Response:", result);
-
-      if (!response.ok) {
-        console.error("❌ WhatsApp API Error:", result);
-        throw new Error(result.error || "Gagal kirim WhatsApp");
-      }
-
-      console.log("✅ WhatsApp sent successfully!");
-      return result;
-
-    } catch (error) {
-      console.error("❌ Gagal kirim WhatsApp:", error);
-      return null;
-    }
-  }
-
   async function handleApprove(tenant: Tenant) {
     if (!window.confirm(`Setujui pendaftaran "${tenant.businessName}"? Toko akan langsung bisa login.`)) return;
     setBusyId(tenant.id);
-    
     try {
-      // Ini panggil backend
       await adminFetch(`/api/admin/tenants/${tenant.id}/approve`, { method: "POST" });
       setToast({ type: "success", message: `${tenant.businessName} berhasil disetujui.` });
-      
-      // Ini panggil Next.js API route (sendiri)
-      if (tenant.phone) {
-        const waMessage = `Halo ${tenant.ownerName},\n\nPendaftaran toko "${tenant.businessName}" telah DISETUJUI. ✅\n\nAkun Anda sudah aktif dan bisa langsung login ke aplikasi.\n\nTerima kasih telah bergabung!\n\n- Admin`;
-        
-        // Fire and forget - jangan await
-        sendWhatsAppNotification(tenant.phone, waMessage).catch(err => 
-          console.error("WhatsApp failed:", err)
-        );
-      }
-      
       await loadTenants();
     } catch (err) {
       setToast({ type: "error", message: err instanceof AdminApiError ? err.message : "Gagal menyetujui tenant" });
@@ -201,26 +136,12 @@ export default function AdminDashboardPage() {
   async function submitReject() {
     if (!rejectTarget || rejectReason.trim().length < 3) return;
     setRejectSubmitting(true);
-    
     try {
-      // Ini panggil backend
       await adminFetch(`/api/admin/tenants/${rejectTarget.id}/reject`, {
         method: "POST",
         body: JSON.stringify({ reason: rejectReason.trim() }),
       });
-      
       setToast({ type: "success", message: `${rejectTarget.businessName} ditolak.` });
-
-      // Ini panggil Next.js API route (sendiri)
-      if (rejectTarget.phone) {
-        const waMessage = `Halo ${rejectTarget.ownerName},\n\nPendaftaran toko "${rejectTarget.businessName}" DITOLAK. ❌\n\nAlasan: ${rejectReason.trim()}\n\nSilakan perbaiki data pendaftaran Anda atau hubungi admin untuk informasi lebih lanjut.\n\n- Admin`;
-        
-        // Fire and forget - jangan await
-        sendWhatsAppNotification(rejectTarget.phone, waMessage).catch(err => 
-          console.error("WhatsApp failed:", err)
-        );
-      }
-
       setRejectTarget(null);
       await loadTenants();
     } catch (err) {

@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
         ...(warehouseId ? { warehouseId } : {}),
         ...(cashierId ? { cashierId } : {}),
       },
-      include: { payments: true },
+      include: { payments: true, items: { include: { product: true } } },
     });
 
     const totalTransactions = sales.length;
@@ -38,6 +38,27 @@ export async function GET(req: NextRequest) {
     const totalOutstanding = sales
       .filter((s) => s.status === "PARTIAL")
       .reduce((sum, s) => sum + (Number(s.grandTotal) - Number(s.paidTotal)), 0);
+
+    // Total jumlah barang (qty) yang terjual, digabung dari semua item di semua transaksi periode ini
+    const totalItemsSold = sales.reduce(
+      (sum, s) => sum + s.items.reduce((itemSum, item) => itemSum + item.qty, 0),
+      0
+    );
+
+    // Rekap produk terlaris berdasarkan qty terjual (5 teratas) — data sudah ada di `items`, murah untuk dihitung sekalian
+    const productStats = new Map<string, { productName: string; qtySold: number; revenue: number }>();
+    for (const sale of sales) {
+      for (const item of sale.items) {
+        const existing = productStats.get(item.productId) ?? { productName: item.product.name, qtySold: 0, revenue: 0 };
+        existing.qtySold += item.qty;
+        existing.revenue += Number(item.subtotal);
+        productStats.set(item.productId, existing);
+      }
+    }
+    const topProducts = [...productStats.entries()]
+      .map(([productId, stat]) => ({ productId, ...stat, revenue: round2(stat.revenue) }))
+      .sort((a, b) => b.qtySold - a.qtySold)
+      .slice(0, 5);
 
     // Rekap per metode pembayaran (untuk cocokkan uang fisik/EDC/QRIS saat tutup kasir)
     const byMethod: Record<string, number> = {};
@@ -50,12 +71,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       period: { from: gte.toISOString(), to: lt.toISOString() },
       totalTransactions,
+      totalItemsSold,
       totalGrossSales: round2(totalGrossSales),
       totalDiscount: round2(totalDiscount),
       totalTax: round2(totalTax),
       totalNetSales: round2(totalNetSales),
       totalOutstanding: round2(totalOutstanding),
       byPaymentMethod: byMethod,
+      topProducts,
     });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
