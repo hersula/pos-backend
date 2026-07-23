@@ -6,13 +6,19 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
   try {
     const user = getTenantUserFromRequest(req);
 
-    const po = await prisma.purchaseOrder.findFirst({
-      where: { id: params.id, tenantId: user.tenantId },
-      include: { supplier: true, warehouse: true, items: { include: { product: true } }, payments: { orderBy: { createdAt: "desc" } } },
-    });
+    const [po, tenant] = await Promise.all([
+      prisma.purchaseOrder.findFirst({
+        where: { id: params.id, tenantId: user.tenantId },
+        include: { supplier: true, warehouse: true, items: { include: { product: true } }, payments: { orderBy: { createdAt: "desc" } } },
+      }),
+      prisma.tenant.findUnique({
+        where: { id: user.tenantId },
+        select: { businessName: true, address: true, phone: true },
+      }),
+    ]);
     if (!po) return NextResponse.json({ message: "Purchase order tidak ditemukan" }, { status: 404 });
 
-    return NextResponse.json({ data: po });
+    return NextResponse.json({ data: { ...po, tenant } });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
     console.error("get purchase order error:", err);
