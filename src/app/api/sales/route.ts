@@ -173,7 +173,14 @@ export async function POST(req: NextRequest) {
             })),
           },
         },
-        include: { items: { include: { product: true } }, payments: true },
+        include: {
+          items: { include: { product: true } },
+          payments: true,
+          cashier: { select: { id: true, name: true } },
+          customer: true,
+          warehouse: true,
+          tenant: { select: { businessName: true, address: true, phone: true } },
+        },
       });
 
       // Kurangi stok untuk setiap item (akan otomatis gagal/rollback kalau stok tidak cukup)
