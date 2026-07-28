@@ -58,8 +58,10 @@ enum BillingCycle {
 }
 
 enum SubscriptionStatus {
-  ACTIVE
-  EXPIRED
+  TRIAL           // masa coba gratis 30 hari
+  ACTIVE          // sudah bayar, masih berlaku
+  PENDING_PAYMENT // owner sudah ajukan perpanjangan, menunggu konfirmasi admin
+  EXPIRED         // masa coba/langganan habis, belum ada pembayaran yang dikonfirmasi
   CANCELLED
 }
 
@@ -69,15 +71,19 @@ enum PaymentStatus {
 }
 
 model Subscription {
-  id            String              @id @default(uuid())
-  tenantId      String              @map("tenant_id")
-  planName      String              @map("plan_name")
-  price         Decimal             @default(0) @db.Decimal(14, 2)
-  billingCycle  BillingCycle        @default(MONTHLY) @map("billing_cycle")
-  startDate     DateTime            @map("start_date") @db.Date
-  endDate       DateTime            @map("end_date") @db.Date
-  status        SubscriptionStatus  @default(ACTIVE)
-  paymentStatus PaymentStatus       @default(UNPAID) @map("payment_status")
+  id                String              @id @default(uuid())
+  tenantId          String              @map("tenant_id")
+  planName          String              @map("plan_name")
+  price             Decimal             @default(0) @db.Decimal(14, 2)
+  billingCycle      BillingCycle        @default(MONTHLY) @map("billing_cycle")
+  startDate         DateTime            @map("start_date") @db.Date
+  endDate           DateTime            @map("end_date") @db.Date
+  status            SubscriptionStatus  @default(TRIAL)
+  paymentStatus     PaymentStatus       @default(UNPAID) @map("payment_status")
+  paymentNote       String?             @map("payment_note") @db.Text
+  paymentRequestedAt DateTime?          @map("payment_requested_at")
+  confirmedBy       String?             @map("confirmed_by")
+  confirmedAt       DateTime?           @map("confirmed_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 

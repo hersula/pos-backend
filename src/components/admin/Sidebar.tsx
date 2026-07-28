@@ -22,9 +22,9 @@ export default function Sidebar({
       <Link href="/admin/dashboard" className={`nav-item ${pathname?.startsWith("/admin/dashboard") ? "active" : ""}`}>
         Tenant
       </Link>
-      <div className="nav-item" style={{ opacity: 0.45, cursor: "default" }}>
-        Langganan <span style={{ fontSize: 10, marginLeft: "auto" }}>segera</span>
-      </div>
+      <Link href="/admin/subscriptions" className={`nav-item ${pathname?.startsWith("/admin/subscriptions") ? "active" : ""}`}>
+        Langganan
+      </Link>
       <Link href="/admin/settings" className={`nav-item ${pathname?.startsWith("/admin/settings") ? "active" : ""}`}>
         Pengaturan
       </Link>

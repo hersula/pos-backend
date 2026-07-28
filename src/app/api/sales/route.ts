@@ -6,6 +6,7 @@ import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock, StockInsufficientError } from "@/lib/inventory";
 import { calculateSaleTotals, generateInvoiceNumber } from "@/lib/sales";
 import { postSaleJournal } from "@/lib/accounting";
+import { checkFreeTransactionLimit, FREE_DAILY_TRANSACTION_LIMIT } from "@/lib/subscription";
 
 // ================= GET — riwayat penjualan =================
 export async function GET(req: NextRequest) {
@@ -92,6 +93,24 @@ export async function POST(req: NextRequest) {
   try {
     const user = getTenantUserFromRequest(req);
     requireRole(user, ["OWNER", "MANAGER", "KASIR"]);
+
+    // Batasi 10 transaksi/hari untuk tenant paket FREE. Tenant SUBSCRIBE (baik
+    // masih trial maupun sudah bayar) tidak kena batas ini.
+    const tenant = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { planType: true } });
+    if (tenant?.planType === "FREE") {
+      const limitCheck = await checkFreeTransactionLimit(user.tenantId);
+      if (!limitCheck.allowed) {
+        return NextResponse.json(
+          {
+            message: `Paket Gratis dibatasi ${FREE_DAILY_TRANSACTION_LIMIT} transaksi per hari. Kamu sudah mencapai batas ini hari ini — upgrade ke Berlangganan untuk transaksi tanpa batas.`,
+            code: "FREE_LIMIT_REACHED",
+            used: limitCheck.used,
+            limit: limitCheck.limit,
+          },
+          { status: 403 }
+        );
+      }
+    }
 
     const parsed = createSaleSchema.safeParse(await req.json());
     if (!parsed.success) {

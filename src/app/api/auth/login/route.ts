@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { comparePassword, signAccessToken, signRefreshToken } from "@/lib/auth";
+import { getSubscriptionAccessStatus } from "@/lib/subscription";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -56,6 +57,23 @@ export async function POST(req: NextRequest) {
 
     if (!user.isActive) {
       return NextResponse.json({ message: "Akun kamu tidak aktif. Hubungi pemilik toko." }, { status: 403 });
+    }
+
+    // Tenant berlangganan (SUBSCRIBE) — cek trial/masa langganan masih berlaku atau tidak.
+    // "Sistem off" untuk tenant yang trial/langganannya habis: login diblokir, TAPI seluruh
+    // data toko (produk, transaksi, dst) tetap aman di database — begitu admin konfirmasi
+    // pembayaran, tenant ini bisa langsung lanjut pakai lagi tanpa kehilangan apa-apa.
+    if (user.tenant.planType === "SUBSCRIBE") {
+      const access = await getSubscriptionAccessStatus(user.tenantId);
+      if (!access.allowed) {
+        return NextResponse.json(
+          {
+            message: access.reason ?? "Langganan kamu sudah tidak aktif. Hubungi admin.",
+            tenantStatus: "SUBSCRIPTION_EXPIRED",
+          },
+          { status: 403 }
+        );
+      }
     }
 
     const payload = {

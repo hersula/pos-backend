@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { hashPassword } from "@/lib/auth";
+import { createTrialSubscription } from "@/lib/subscription";
 
 const registerSchema = z.object({
   businessName: z.string().min(3, "Nama usaha minimal 3 karakter"),
@@ -64,24 +65,11 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Jika pilih SUBSCRIBE, catat baris subscription awal (status ACTIVE menyusul setelah pembayaran diverifikasi)
+      // Jika pilih SUBSCRIBE, langsung mulai masa coba gratis (trial) 30 hari.
+      // Setelah trial habis, tenant tetap harus di-approve admin dulu (seperti FREE)
+      // baru bisa login; begitu di-approve, hitung mundur trial-nya sudah berjalan.
       if (planType === "SUBSCRIBE") {
-        const start = new Date();
-        const end = new Date();
-        end.setMonth(end.getMonth() + 1);
-
-        await tx.subscription.create({
-          data: {
-            tenantId: newTenant.id,
-            planName: "Basic",
-            price: 0, // TODO: isi sesuai paket yang dipilih dari halaman pricing
-            billingCycle: "MONTHLY",
-            startDate: start,
-            endDate: end,
-            status: "ACTIVE",
-            paymentStatus: "UNPAID",
-          },
-        });
+        await createTrialSubscription(newTenant.id, "Trial", tx);
       }
 
       return newTenant;

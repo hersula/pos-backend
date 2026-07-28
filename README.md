@@ -373,14 +373,81 @@ curl "http://localhost:3000/api/reports/purchases-summary" -H "Authorization: Be
 
 ---
 
+## 7. Paket & Langganan (Fase 6)
+
+Sistem pembatasan paket **FREE** (10 transaksi/hari) dan **SUBSCRIBE** (trial 30 hari, lalu perlu perpanjangan manual lewat konfirmasi admin — belum terhubung payment gateway sungguhan).
+
+### Aturan FREE
+
+- Dibatasi **10 transaksi penjualan per hari** (dihitung ulang tiap hari, menghitung SEMUA sale yang dibuat hari itu apapun statusnya — supaya tidak bisa disiasati batal-buat-ulang).
+- Begitu limit tercapai, `POST /api/sales` balas `403` dengan `code: "FREE_LIMIT_REACHED"` supaya Flutter bisa tampilkan CTA upgrade, bukan cuma pesan error generik.
+- Tidak ada batasan LOGIN untuk FREE — tenant tetap bisa buka app & lihat data, cuma tidak bisa transaksi baru sampai besok (atau upgrade).
+
+### Aturan SUBSCRIBE — Trial 30 Hari
+
+- Begitu tenant pilih **Berlangganan** (saat registrasi ATAU upgrade dari FREE lewat `POST /api/tenant/subscription/upgrade`), otomatis dapat baris `Subscription` dengan `status: TRIAL`, `endDate` = hari ini + 30 hari.
+- Selama trial (atau setelah admin konfirmasi pembayaran dan `status: ACTIVE`), tenant bisa login & transaksi tanpa batas.
+- **Begitu `endDate` lewat dan belum ada pembayaran terkonfirmasi → "sistem off"**: `POST /api/auth/login` dan `POST /api/auth/refresh` menolak akses (403/401) dengan `tenantStatus: "SUBSCRIPTION_EXPIRED"`, TAPI **tidak ada data yang dihapus sama sekali** — produk, transaksi, laporan, semuanya tetap utuh di database, menunggu diaktifkan lagi.
+- Owner bisa **ajukan pembayaran** kapan saja (baik sebelum maupun sesudah expired) lewat `POST /api/tenant/subscription/request-payment` → status jadi `PENDING_PAYMENT`, muncul di Admin Panel untuk dikonfirmasi.
+- Super Admin konfirmasi lewat `POST /api/admin/subscriptions/:id/confirm-payment` (Admin Panel → menu **Langganan**) → `endDate` diperpanjang (default +30 hari, bisa disesuaikan), `status: ACTIVE`, `paymentStatus: PAID`, dan otomatis kirim notifikasi WhatsApp ke pemilik toko kalau berhasil.
+- Perpanjangan dihitung dari `endDate` LAMA kalau masih berlaku (renewal lebih awal sebelum habis, sisa masa aktif tidak hangus), atau dari HARI INI kalau sudah lewat expired.
+
+### Endpoint
+
+| Method | Endpoint | Role | Deskripsi |
+|---|---|---|---|
+| GET | `/api/tenant/subscription` | semua role | Status langganan tenant saat ini (dipakai buat tampilan trial countdown / sisa kuota FREE di mobile) |
+| POST | `/api/tenant/subscription/upgrade` | OWNER | Upgrade FREE → SUBSCRIBE, langsung dapat trial 30 hari |
+| POST | `/api/tenant/subscription/request-payment` | OWNER | Ajukan konfirmasi pembayaran perpanjangan (opsional sertakan `note`) |
+| GET | `/api/admin/subscriptions?status=` | Admin | List semua langganan tenant (filter: `TRIAL`/`ACTIVE`/`PENDING_PAYMENT`/`EXPIRED`/`CANCELLED`) |
+| POST | `/api/admin/subscriptions/:id/confirm-payment` | Admin | Konfirmasi pembayaran, perpanjang `endDate` (body opsional: `{ extendDays, price }`) |
+
+### Contoh testing
+
+```bash
+TOKEN="<accessToken owner FREE>"
+
+# 1. Coba upgrade ke Berlangganan
+curl -X POST http://localhost:3000/api/tenant/subscription/upgrade \
+  -H "Authorization: Bearer $TOKEN"
+
+# 2. Cek status langganan (harusnya TRIAL, ~30 hari tersisa)
+curl http://localhost:3000/api/tenant/subscription -H "Authorization: Bearer $TOKEN"
+
+# 3. Ajukan pembayaran (simulasi trial mau habis)
+curl -X POST http://localhost:3000/api/tenant/subscription/request-payment \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{ "note": "Sudah transfer Rp150.000 via BCA" }'
+
+# 4. Sebagai admin, lihat daftar yang menunggu konfirmasi
+curl "http://localhost:3000/api/admin/subscriptions?status=PENDING_PAYMENT" \
+  -H "Authorization: Bearer <ACCESS_TOKEN_ADMIN>"
+
+# 5. Konfirmasi pembayaran (perpanjang 30 hari dari hari ini)
+curl -X POST http://localhost:3000/api/admin/subscriptions/<SUBSCRIPTION_ID>/confirm-payment \
+  -H "Authorization: Bearer <ACCESS_TOKEN_ADMIN>" -H "Content-Type: application/json" \
+  -d '{ "extendDays": 30 }'
+```
+
+### Desain penting
+
+- **`src/lib/subscription.ts`** — satu-satunya tempat logika trial/limit dihitung (`getSubscriptionAccessStatus`, `checkFreeTransactionLimit`, `createTrialSubscription`). Dipanggil dari `login`, `refresh`, dan `POST /api/sales` — jadi kalau nanti mau ubah durasi trial atau jumlah limit FREE, cukup ubah `TRIAL_DAYS`/`FREE_DAILY_TRANSACTION_LIMIT` di satu file ini.
+- **Kenapa dicek ulang di `refresh` juga, bukan cuma `login`?** Access token cuma hidup 15 menit, tapi refresh token 30 hari — tanpa pengecekan ulang di endpoint refresh, tenant yang trial-nya baru habis bisa tetap dapat access token baru selamanya via refresh token lama. Re-validasi di `refresh` memastikan "sistem off" beneran berlaku dalam hitungan menit setelah expired, bukan menunggu user logout manual.
+- **Satu baris `Subscription` per tenant, di-update terus (bukan bikin baris baru tiap perpanjangan)** — lebih simpel untuk kasus penggunaan saat ini (tidak perlu histori detail tiap siklus pembayaran). Kalau nanti butuh riwayat pembayaran lengkap per bulan, tinggal tambah model terpisah (mis. `SubscriptionPayment`) tanpa perlu ubah struktur `Subscription` yang sudah ada.
+- Field `paymentNote` di-reset ke `null` setiap kali admin konfirmasi pembayaran — supaya kalau owner ajukan lagi bulan depan, catatan lama tidak nyangkut/membingungkan.
+
+---
+
 ## 8. Admin Panel Web (Fase 5)
 
 Halaman web untuk tim platform meninjau & menyetujui/menolak pendaftaran tenant — bagian dari project Next.js yang sama (bukan project terpisah), jalan otomatis begitu `npm run dev` dijalankan.
 
 | Halaman | URL | Deskripsi |
+
 |---|---|---|
 | Login | `/admin/login` | Login super admin (pakai akun dari `npm run seed`) |
 | Dashboard | `/admin/dashboard` | Tabel tenant dengan filter status, pencarian, tombol Setujui/Tolak, dan ringkasan jumlah per status |
+| Langganan | `/admin/subscriptions` | Pantau trial & konfirmasi pembayaran perpanjangan langganan tenant (lihat bagian 7) |
 | Pengaturan | `/admin/settings` | Atur Device ID gateway WhatsApp + tombol kirim pesan test (khusus Super Admin untuk simpan) |
 
 Cara pakai:
@@ -393,7 +460,7 @@ npm run dev
 - Approve/Reject di dashboard langsung memanggil endpoint `/api/admin/tenants/:id/approve` & `/api/admin/tenants/:id/reject` yang sudah dibangun di Fase 1 — tidak ada logic baru di backend, halaman ini murni UI di atas API yang sudah ada.
 - Tombol **Setujui** minta konfirmasi browser dulu (aksinya langsung mengaktifkan akun toko). Tombol **Tolak** membuka dialog untuk mengisi alasan (wajib diisi, ditampilkan ke pemilik toko saat mereka coba login).
 - Styling murni CSS custom di `src/app/admin/admin.css` (tanpa library UI eksternal) — badge status dibuat bergaya "cap stempel" (PENDING/DISETUJUI/DITOLAK) supaya jelas ini adalah halaman persetujuan dokumen/administrasi.
-- Modul **Langganan** (kelola paket & pembayaran subscription) sengaja belum dibuatkan halamannya — data `subscriptions` sudah ada di database sejak registrasi, tapi UI-nya menyusul setelah integrasi payment gateway.
+- Modul **Langganan** sekarang sudah ada UI-nya di `/admin/subscriptions` (lihat bagian 7) — konfirmasi pembayaran masih manual (belum terhubung payment gateway sungguhan seperti Midtrans/Xendit).
 
 ### Notifikasi WhatsApp (approve/tolak tenant)
 
@@ -436,5 +503,5 @@ curl -X PUT http://localhost:3000/api/admin/settings/whatsapp \
 Backend API (Fase 1–4) dan Admin Panel web (Fase 5) sudah lengkap. Yang belum dibangun:
 
 - **Fase 6** — Aplikasi mobile Flutter yang mengonsumsi seluruh API di atas + cetak struk Bluetooth
-- Integrasi payment gateway (Midtrans/Xendit) untuk tenant `SUBSCRIBE` + halaman kelola langganan di admin panel
+- Integrasi payment gateway sungguhan (Midtrans/Xendit) untuk tenant `SUBSCRIBE` — saat ini konfirmasi pembayaran masih manual lewat Admin Panel (`/admin/subscriptions`), owner ajukan via app lalu admin konfirmasi setelah cek transfer manual
 - ~~Notifikasi email~~ — sudah diganti notifikasi **WhatsApp** (lihat bagian Admin Panel di atas), lebih relevan untuk target pengguna UMKM
