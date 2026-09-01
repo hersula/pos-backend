@@ -38,16 +38,17 @@ model Tenant {
   createdAt      DateTime     @default(now()) @map("created_at")
   updatedAt      DateTime     @updatedAt @map("updated_at")
 
-  subscriptions Subscription[]
-  users         User[]
-  warehouses    Warehouse[]
-  categories    Category[]
-  products      Product[]
-  suppliers     Supplier[]
-  customers     Customer[]
-  sales         Sale[]
-  accounts      ChartOfAccount[]
-  expenses      Expense[]
+  subscriptions       Subscription[]
+  users               User[]
+  warehouses          Warehouse[]
+  categories          Category[]
+  products            Product[]
+  suppliers           Supplier[]
+  customers           Customer[]
+  sales               Sale[]
+  accounts            ChartOfAccount[]
+  expenses            Expense[]
+  roleMenuPermissions RoleMenuPermission[]
 
   @@map("tenants")
 }
@@ -58,10 +59,10 @@ enum BillingCycle {
 }
 
 enum SubscriptionStatus {
-  TRIAL           // masa coba gratis 30 hari
-  ACTIVE          // sudah bayar, masih berlaku
+  TRIAL // masa coba gratis 30 hari
+  ACTIVE // sudah bayar, masih berlaku
   PENDING_PAYMENT // owner sudah ajukan perpanjangan, menunggu konfirmasi admin
-  EXPIRED         // masa coba/langganan habis, belum ada pembayaran yang dikonfirmasi
+  EXPIRED // masa coba/langganan habis, belum ada pembayaran yang dikonfirmasi
   CANCELLED
 }
 
@@ -71,19 +72,19 @@ enum PaymentStatus {
 }
 
 model Subscription {
-  id                String              @id @default(uuid())
-  tenantId          String              @map("tenant_id")
-  planName          String              @map("plan_name")
-  price             Decimal             @default(0) @db.Decimal(14, 2)
-  billingCycle      BillingCycle        @default(MONTHLY) @map("billing_cycle")
-  startDate         DateTime            @map("start_date") @db.Date
-  endDate           DateTime            @map("end_date") @db.Date
-  status            SubscriptionStatus  @default(TRIAL)
-  paymentStatus     PaymentStatus       @default(UNPAID) @map("payment_status")
-  paymentNote       String?             @map("payment_note") @db.Text
+  id                 String             @id @default(uuid())
+  tenantId           String             @map("tenant_id")
+  planName           String             @map("plan_name")
+  price              Decimal            @default(0) @db.Decimal(14, 2)
+  billingCycle       BillingCycle       @default(MONTHLY) @map("billing_cycle")
+  startDate          DateTime           @map("start_date") @db.Date
+  endDate            DateTime           @map("end_date") @db.Date
+  status             SubscriptionStatus @default(TRIAL)
+  paymentStatus      PaymentStatus      @default(UNPAID) @map("payment_status")
+  paymentNote        String?            @map("payment_note") @db.Text
   paymentRequestedAt DateTime?          @map("payment_requested_at")
-  confirmedBy       String?             @map("confirmed_by")
-  confirmedAt       DateTime?           @map("confirmed_at")
+  confirmedBy        String?            @map("confirmed_by")
+  confirmedAt        DateTime?          @map("confirmed_at")
 
   tenant Tenant @relation(fields: [tenantId], references: [id])
 
@@ -140,6 +141,22 @@ model User {
   @@map("users")
 }
 
+// Override akses menu per role. Model "opt-out": tidak ada baris = akses
+// diizinkan (default true). OWNER dan menuKey "pengaturan" tidak boleh
+// dinonaktifkan — di-enforce di lib/menu-permissions.ts, bukan di skema ini.
+model RoleMenuPermission {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  role      UserRole
+  menuKey   String   @map("menu_key")
+  canAccess Boolean  @default(true) @map("can_access")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@unique([tenantId, role, menuKey])
+  @@map("role_menu_permissions")
+}
+
 // ==================================================
 // INVENTORI
 // ==================================================
@@ -170,11 +187,11 @@ model Product {
   isActive   Boolean  @default(true) @map("is_active")
   createdAt  DateTime @default(now()) @map("created_at")
 
-  tenant   Tenant    @relation(fields: [tenantId], references: [id])
-  category Category? @relation(fields: [categoryId], references: [id])
-  stocks   Stock[]
-  saleItems SaleItem[]
-  stockMovements StockMovement[]
+  tenant             Tenant              @relation(fields: [tenantId], references: [id])
+  category           Category?           @relation(fields: [categoryId], references: [id])
+  stocks             Stock[]
+  saleItems          SaleItem[]
+  stockMovements     StockMovement[]
   purchaseOrderItems PurchaseOrderItem[]
 
   @@map("products")
@@ -185,9 +202,9 @@ model Warehouse {
   tenantId String @map("tenant_id")
   name     String
 
-  tenant Tenant  @relation(fields: [tenantId], references: [id])
-  stocks Stock[]
-  sales  Sale[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  stocks         Stock[]
+  sales          Sale[]
   stockMovements StockMovement[]
   purchaseOrders PurchaseOrder[]
 
@@ -241,8 +258,8 @@ model Supplier {
   phone    String?
   address  String? @db.Text
 
-  tenant          Tenant          @relation(fields: [tenantId], references: [id])
-  purchaseOrders  PurchaseOrder[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  purchaseOrders PurchaseOrder[]
 
   @@map("suppliers")
 }
@@ -254,9 +271,9 @@ enum PurchaseOrderStatus {
 }
 
 enum PurchasePaymentMethod {
-  CASH      // Tunai
-  CREDIT    // Tempo (hutang usaha)
-  TRANSFER  // Transfer Bank
+  CASH // Tunai
+  CREDIT // Tempo (hutang usaha)
+  TRANSFER // Transfer Bank
 }
 
 enum PurchasePaymentStatus {
@@ -279,10 +296,10 @@ model PurchaseOrder {
   createdBy     String?               @map("created_by")
   createdAt     DateTime              @default(now()) @map("created_at")
 
-  supplier Supplier?          @relation(fields: [supplierId], references: [id])
-  warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
-  items    PurchaseOrderItem[]
-  payments PurchasePayment[]
+  supplier  Supplier?           @relation(fields: [supplierId], references: [id])
+  warehouse Warehouse           @relation(fields: [warehouseId], references: [id])
+  items     PurchaseOrderItem[]
+  payments  PurchasePayment[]
 
   @@unique([tenantId, poNumber])
   @@map("purchase_orders")
@@ -345,29 +362,29 @@ enum SaleStatus {
 }
 
 model Sale {
-  id              String       @id @default(uuid())
-  tenantId        String       @map("tenant_id")
-  warehouseId     String       @map("warehouse_id")
-  customerId      String?      @map("customer_id")
-  invoiceNo       String       @map("invoice_no")
-  cashierId       String       @map("cashier_id")
-  subtotal        Decimal      @default(0) @db.Decimal(14, 2)
-  discountType    DiscountType @default(NOMINAL) @map("discount_type")
-  discountValue   Decimal      @default(0) @map("discount_value") @db.Decimal(14, 2)
-  discountAmount  Decimal      @default(0) @map("discount_amount") @db.Decimal(14, 2)
-  taxPercent      Decimal      @default(11) @map("tax_percent") @db.Decimal(5, 2)
-  taxAmount       Decimal      @default(0) @map("tax_amount") @db.Decimal(14, 2)
-  grandTotal      Decimal      @default(0) @map("grand_total") @db.Decimal(14, 2)
-  paidTotal       Decimal      @default(0) @map("paid_total") @db.Decimal(14, 2)
-  changeAmount    Decimal      @default(0) @map("change_amount") @db.Decimal(14, 2)
-  status          SaleStatus   @default(PAID)
-  note            String?
-  createdAt       DateTime     @default(now()) @map("created_at")
+  id             String       @id @default(uuid())
+  tenantId       String       @map("tenant_id")
+  warehouseId    String       @map("warehouse_id")
+  customerId     String?      @map("customer_id")
+  invoiceNo      String       @map("invoice_no")
+  cashierId      String       @map("cashier_id")
+  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
+  discountType   DiscountType @default(NOMINAL) @map("discount_type")
+  discountValue  Decimal      @default(0) @map("discount_value") @db.Decimal(14, 2)
+  discountAmount Decimal      @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxPercent     Decimal      @default(11) @map("tax_percent") @db.Decimal(5, 2)
+  taxAmount      Decimal      @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  grandTotal     Decimal      @default(0) @map("grand_total") @db.Decimal(14, 2)
+  paidTotal      Decimal      @default(0) @map("paid_total") @db.Decimal(14, 2)
+  changeAmount   Decimal      @default(0) @map("change_amount") @db.Decimal(14, 2)
+  status         SaleStatus   @default(PAID)
+  note           String?
+  createdAt      DateTime     @default(now()) @map("created_at")
 
-  tenant    Tenant       @relation(fields: [tenantId], references: [id])
-  warehouse Warehouse    @relation(fields: [warehouseId], references: [id])
-  customer  Customer?    @relation(fields: [customerId], references: [id])
-  cashier   User         @relation("CashierSales", fields: [cashierId], references: [id])
+  tenant    Tenant        @relation(fields: [tenantId], references: [id])
+  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
+  customer  Customer?     @relation(fields: [customerId], references: [id])
+  cashier   User          @relation("CashierSales", fields: [cashierId], references: [id])
   items     SaleItem[]
   payments  SalePayment[]
 
@@ -400,12 +417,12 @@ enum PaymentMethod {
 }
 
 model SalePayment {
-  id           String        @id @default(uuid())
-  saleId       String        @map("sale_id")
-  method       PaymentMethod
-  amount       Decimal       @db.Decimal(14, 2)
-  referenceNo  String?       @map("reference_no")
-  createdAt    DateTime      @default(now()) @map("created_at")
+  id          String        @id @default(uuid())
+  saleId      String        @map("sale_id")
+  method      PaymentMethod
+  amount      Decimal       @db.Decimal(14, 2)
+  referenceNo String?       @map("reference_no")
+  createdAt   DateTime      @default(now()) @map("created_at")
 
   sale Sale @relation(fields: [saleId], references: [id])
 
@@ -431,7 +448,7 @@ model ChartOfAccount {
   name     String
   type     AccountType
 
-  tenant       Tenant         @relation(fields: [tenantId], references: [id])
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
   journalLines JournalLine[]
 
   @@unique([tenantId, code])

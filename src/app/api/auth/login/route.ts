@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { comparePassword, signAccessToken, signRefreshToken } from "@/lib/auth";
 import { getSubscriptionAccessStatus } from "@/lib/subscription";
+import { resolveMenuAccess } from "@/lib/menu-permissions";
 
 const loginSchema = z.object({
   email: z.string().email(),
@@ -85,6 +86,7 @@ export async function POST(req: NextRequest) {
 
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
+    const menuAccess = await resolveMenuAccess(user.tenantId, user.role);
 
     return NextResponse.json({
       message: "Login berhasil",
@@ -95,6 +97,7 @@ export async function POST(req: NextRequest) {
         name: user.name,
         email: user.email,
         role: user.role,
+        menuAccess,
         tenant: {
           id: user.tenant.id,
           businessName: user.tenant.businessName,
