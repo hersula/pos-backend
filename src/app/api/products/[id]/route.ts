@@ -30,7 +30,12 @@ const updateSchema = z.object({
   costPrice: z.number().min(0).optional(),
   sellPrice: z.number().min(0).optional(),
   minStock: z.number().int().min(0).optional(),
-  imageUrl: z.string().optional(),
+  // string kosong dari mobile = hapus gambar -> simpan null
+  imageUrl: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((v) => (v === "" ? null : v)),
   isActive: z.boolean().optional(),
 });
 

@@ -73,7 +73,10 @@ const createSchema = z.object({
   costPrice: z.number().min(0).default(0),
   sellPrice: z.number().min(0),
   minStock: z.number().int().min(0).default(0),
-  imageUrl: z.string().optional(),
+  imageUrl: z
+    .string()
+    .optional()
+    .transform((v) => (v === "" ? undefined : v)),
   // stok awal opsional saat produk pertama kali dibuat
   initialStock: z
     .object({

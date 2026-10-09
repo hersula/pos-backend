@@ -3,3 +3,6 @@ node_modules/
 .env
 *.log
 .DS_Store
+
+# Gambar produk yang diupload dari aplikasi mobile — data runtime, jangan di-commit
+storage/
