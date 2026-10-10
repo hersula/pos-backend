@@ -193,8 +193,32 @@ model Product {
   saleItems          SaleItem[]
   stockMovements     StockMovement[]
   purchaseOrderItems PurchaseOrderItem[]
+  units              ProductUnit[]
 
   @@map("products")
+}
+
+// Satuan jual/beli tambahan di luar satuan dasar produk (Product.unit), mis.
+// dasarnya "Botol" tapi juga dijual per "Dus" dengan harga & barcode sendiri.
+// conversionQty = berapa banyak satuan dasar per 1 satuan ini (1 Dus = 24 Botol -> 24).
+// Stok (Stock.quantity) & costPrice produk selalu dalam satuan dasar; satuan ini
+// cuma lapisan konversi di sisi jual-beli (SaleItem/PurchaseOrderItem).
+model ProductUnit {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  productId     String   @map("product_id")
+  name          String
+  conversionQty Int      @map("conversion_qty")
+  sellPrice     Decimal  @map("sell_price") @db.Decimal(14, 2)
+  barcode       String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  product            Product             @relation(fields: [productId], references: [id])
+  saleItems          SaleItem[]
+  purchaseOrderItems PurchaseOrderItem[]
+
+  @@map("product_units")
 }
 
 model Warehouse {
@@ -325,9 +349,16 @@ model PurchaseOrderItem {
   qty             Int
   unitCost        Decimal @map("unit_cost") @db.Decimal(14, 2)
   subtotal        Decimal @db.Decimal(14, 2)
+  // Snapshot satuan tambahan (kalau item ini dibeli per Dus dkk, bukan satuan dasar).
+  // conversionQty di-snapshot di sini (bukan dibaca ulang dari ProductUnit) supaya kalau
+  // konversi diedit belakangan, riwayat PO lama tidak ikut berubah perhitungannya.
+  productUnitId   String? @map("product_unit_id")
+  unitLabel       String? @map("unit_label")
+  conversionQty   Int     @default(1) @map("conversion_qty")
 
   purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
   product       Product       @relation(fields: [productId], references: [id])
+  productUnit   ProductUnit?  @relation(fields: [productUnitId], references: [id])
 
   @@map("purchase_order_items")
 }
@@ -400,9 +431,16 @@ model SaleItem {
   unitPrice      Decimal @map("unit_price") @db.Decimal(14, 2)
   discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(14, 2)
   subtotal       Decimal @db.Decimal(14, 2)
+  // Snapshot satuan tambahan (kalau item ini dijual per Dus dkk, bukan satuan dasar).
+  // conversionQty di-snapshot di sini supaya kalau konversi diedit belakangan,
+  // riwayat transaksi lama tidak ikut berubah perhitungannya.
+  productUnitId  String? @map("product_unit_id")
+  unitLabel      String? @map("unit_label")
+  conversionQty  Int     @default(1) @map("conversion_qty")
 
-  sale    Sale    @relation(fields: [saleId], references: [id])
-  product Product @relation(fields: [productId], references: [id])
+  sale        Sale         @relation(fields: [saleId], references: [id])
+  product     Product      @relation(fields: [productId], references: [id])
+  productUnit ProductUnit? @relation(fields: [productUnitId], references: [id])
 
   @@map("sale_items")
 }

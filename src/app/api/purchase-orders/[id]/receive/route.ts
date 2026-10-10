@@ -24,13 +24,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
 
     await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       for (const item of po.items) {
-        // Tambah stok di gudang tujuan PO
+        // Tambah stok di gudang tujuan PO, selalu dalam satuan dasar (qty x conversionQty) —
+        // beli 5 Dus @ konversi 24 Botol/Dus = +120 Botol ke Stock, bukan +5.
         await adjustStock(tx, {
           tenantId: user.tenantId,
           productId: item.productId,
           warehouseId: po.warehouseId,
           type: "IN",
-          qty: item.qty,
+          qty: item.qty * item.conversionQty,
           direction: 1,
           referenceType: "PURCHASE",
           referenceId: po.id,
@@ -38,10 +39,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
           createdBy: user.userId,
         });
 
-        // Update harga modal produk mengikuti harga beli terbaru (metode: harga beli terakhir)
+        // Update harga modal produk mengikuti harga beli terbaru (metode: harga beli terakhir).
+        // costPrice selalu per satuan dasar, jadi kalau dibeli per Dus, dibagi dulu dgn konversinya.
         await tx.product.update({
           where: { id: item.productId },
-          data: { costPrice: item.unitCost },
+          data: { costPrice: Number(item.unitCost) / item.conversionQty },
         });
       }
 

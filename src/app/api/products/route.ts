@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock } from "@/lib/inventory";
+import { assertUnitBarcodesAvailable, syncProductUnits, unitSchema, DuplicateBarcodeError } from "@/lib/product-units";
 
 export async function GET(req: NextRequest) {
   try {
@@ -35,7 +36,11 @@ export async function GET(req: NextRequest) {
     const [products, total] = await Promise.all([
       prisma.product.findMany({
         where,
-        include: { category: true, stocks: { include: { warehouse: true } } },
+        include: {
+          category: true,
+          stocks: { include: { warehouse: true } },
+          units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } },
+        },
         orderBy: { name: "asc" },
         skip: (page - 1) * pageSize,
         take: pageSize,
@@ -84,6 +89,8 @@ const createSchema = z.object({
       quantity: z.number().int().min(0),
     })
     .optional(),
+  // satuan jual tambahan opsional (mis. "Dus" = 24 x satuan dasar), lihat lib/product-units.ts
+  units: z.array(unitSchema).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -103,6 +110,10 @@ export async function POST(req: NextRequest) {
     }
 
     const product = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      if (data.units && data.units.length > 0) {
+        await assertUnitBarcodesAvailable(tx, user.tenantId, data.units);
+      }
+
       const newProduct = await tx.product.create({
         data: {
           tenantId: user.tenantId,
@@ -118,6 +129,10 @@ export async function POST(req: NextRequest) {
         },
       });
 
+      if (data.units && data.units.length > 0) {
+        await syncProductUnits(tx, user.tenantId, newProduct.id, data.units);
+      }
+
       if (data.initialStock && data.initialStock.quantity > 0) {
         await adjustStock(tx, {
           tenantId: user.tenantId,
@@ -132,12 +147,13 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      return newProduct;
+      return tx.product.findUniqueOrThrow({ where: { id: newProduct.id }, include: { units: true } });
     });
 
     return NextResponse.json({ message: "Produk berhasil dibuat", data: product }, { status: 201 });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
+    if (err instanceof DuplicateBarcodeError) return NextResponse.json({ message: err.message }, { status: 409 });
     console.error("create product error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }

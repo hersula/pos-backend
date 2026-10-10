@@ -25,8 +25,9 @@ export async function GET(req: NextRequest) {
 
 const itemSchema = z.object({
   productId: z.string(),
-  qty: z.number().int().positive(),
-  unitCost: z.number().min(0),
+  productUnitId: z.string().optional(), // kalau beli pakai satuan tambahan (mis. "Dus"), bukan satuan dasar
+  qty: z.number().int().positive(), // qty dalam satuan yang dipilih (productUnitId), BUKAN selalu satuan dasar
+  unitCost: z.number().min(0), // harga beli per satuan yang dipilih
 });
 
 const createSchema = z.object({
@@ -50,7 +51,32 @@ export async function POST(req: NextRequest) {
     const warehouse = await prisma.warehouse.findFirst({ where: { id: warehouseId, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang tidak ditemukan" }, { status: 404 });
 
-    const total = items.reduce((sum, it) => sum + it.qty * it.unitCost, 0);
+    // Ambil produk + satuan tambahannya utk validasi productUnitId & snapshot konversi
+    const productIds = items.map((it) => it.productId);
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds }, tenantId: user.tenantId },
+      include: { units: true },
+    });
+    const productMap = new Map(products.map((p) => [p.id, p]));
+
+    for (const it of items) {
+      const product = productMap.get(it.productId);
+      if (!product) return NextResponse.json({ message: `Produk dengan id ${it.productId} tidak ditemukan` }, { status: 404 });
+      if (it.productUnitId && !product.units.some((u) => u.id === it.productUnitId)) {
+        return NextResponse.json(
+          { message: `Satuan yang dipilih untuk produk "${product.name}" tidak ditemukan` },
+          { status: 404 }
+        );
+      }
+    }
+
+    const resolvedItems = items.map((it) => {
+      const product = productMap.get(it.productId)!;
+      const unit = it.productUnitId ? product.units.find((u) => u.id === it.productUnitId) : undefined;
+      return { ...it, unitLabel: unit?.name ?? null, conversionQty: unit?.conversionQty ?? 1 };
+    });
+
+    const total = resolvedItems.reduce((sum, it) => sum + it.qty * it.unitCost, 0);
     const poNumber = `PO-${Date.now()}`; // sederhana & unik; bisa diganti format PO-YYYYMMDD-0001 sesuai kebutuhan
 
     const po = await prisma.purchaseOrder.create({
@@ -64,8 +90,11 @@ export async function POST(req: NextRequest) {
         paymentMethod,
         createdBy: user.userId,
         items: {
-          create: items.map((it) => ({
+          create: resolvedItems.map((it) => ({
             productId: it.productId,
+            productUnitId: it.productUnitId,
+            unitLabel: it.unitLabel,
+            conversionQty: it.conversionQty,
             qty: it.qty,
             unitCost: it.unitCost,
             subtotal: it.qty * it.unitCost,

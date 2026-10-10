@@ -67,8 +67,9 @@ export async function GET(req: NextRequest) {
 // ================= POST — buat transaksi penjualan =================
 const itemSchema = z.object({
   productId: z.string(),
-  qty: z.number().int().positive(),
-  unitPrice: z.number().min(0).optional(), // kalau tidak diisi, ambil dari sellPrice produk saat ini
+  productUnitId: z.string().optional(), // kalau dijual pakai satuan tambahan (mis. "Dus"), bukan satuan dasar
+  qty: z.number().int().positive(), // qty dalam satuan yang dipilih (productUnitId), BUKAN selalu satuan dasar
+  unitPrice: z.number().min(0).optional(), // kalau tidak diisi, ambil dari sellPrice satuan/produk saat ini
   discountAmount: z.number().min(0).default(0), // diskon nominal per item, opsional
 });
 
@@ -121,25 +122,36 @@ export async function POST(req: NextRequest) {
     const warehouse = await prisma.warehouse.findFirst({ where: { id: data.warehouseId, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang/toko tidak ditemukan" }, { status: 404 });
 
-    // Ambil semua produk sekaligus untuk validasi kepemilikan tenant & harga default
+    // Ambil semua produk sekaligus (beserta satuan tambahannya) utk validasi kepemilikan tenant & harga default
     const productIds = data.items.map((it) => it.productId);
     const products = await prisma.product.findMany({
       where: { id: { in: productIds }, tenantId: user.tenantId },
+      include: { units: true },
     });
     const productMap = new Map(products.map((p) => [p.id, p]));
 
     for (const item of data.items) {
-      if (!productMap.has(item.productId)) {
+      const product = productMap.get(item.productId);
+      if (!product) {
         return NextResponse.json({ message: `Produk dengan id ${item.productId} tidak ditemukan` }, { status: 404 });
+      }
+      if (item.productUnitId && !product.units.some((u) => u.id === item.productUnitId)) {
+        return NextResponse.json(
+          { message: `Satuan yang dipilih untuk produk "${product.name}" tidak ditemukan` },
+          { status: 404 }
+        );
       }
     }
 
-    // Resolusi unitPrice: pakai yang dikirim client kalau ada, kalau tidak pakai sellPrice produk saat ini
+    // Resolusi satuan (konversi ke satuan dasar utk stok/HPP) & unitPrice default
     const resolvedItems = data.items.map((item) => {
       const product = productMap.get(item.productId)!;
+      const unit = item.productUnitId ? product.units.find((u) => u.id === item.productUnitId) : undefined;
       return {
         ...item,
-        unitPrice: item.unitPrice ?? Number(product.sellPrice),
+        unitPrice: item.unitPrice ?? Number(unit?.sellPrice ?? product.sellPrice),
+        unitLabel: unit?.name ?? null,
+        conversionQty: unit?.conversionQty ?? 1,
       };
     });
 
@@ -178,6 +190,9 @@ export async function POST(req: NextRequest) {
           items: {
             create: resolvedItems.map((item) => ({
               productId: item.productId,
+              productUnitId: item.productUnitId,
+              unitLabel: item.unitLabel,
+              conversionQty: item.conversionQty,
               qty: item.qty,
               unitPrice: item.unitPrice,
               discountAmount: item.discountAmount ?? 0,
@@ -202,14 +217,15 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Kurangi stok untuk setiap item (akan otomatis gagal/rollback kalau stok tidak cukup)
+      // Kurangi stok untuk setiap item, selalu dalam satuan dasar (qty x conversionQty) —
+      // 2 Dus terjual @ konversi 24 Botol/Dus = 48 Botol dikurangi dari Stock, bukan 2.
       for (const item of resolvedItems) {
         await adjustStock(tx, {
           tenantId: user.tenantId,
           productId: item.productId,
           warehouseId: data.warehouseId,
           type: "OUT",
-          qty: item.qty,
+          qty: item.qty * item.conversionQty,
           direction: -1,
           referenceType: "SALE",
           referenceId: newSale.id,
@@ -219,10 +235,11 @@ export async function POST(req: NextRequest) {
       }
 
       // Jurnal akunting otomatis: Kas/Bank & Piutang (debit) vs Pendapatan & PPN (kredit),
-      // plus HPP (debit) vs Persediaan (kredit) dari harga modal barang yang terjual
+      // plus HPP (debit) vs Persediaan (kredit) dari harga modal barang yang terjual.
+      // costPrice produk selalu per satuan dasar, jadi HPP juga ikut dikali conversionQty.
       const cogsAmount = resolvedItems.reduce((sum, item) => {
         const product = productMap.get(item.productId)!;
-        return sum + item.qty * Number(product.costPrice);
+        return sum + item.qty * item.conversionQty * Number(product.costPrice);
       }, 0);
 
       await postSaleJournal(tx, {

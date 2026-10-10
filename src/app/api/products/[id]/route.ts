@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
+import { assertUnitBarcodesAvailable, syncProductUnits, unitSchema, DuplicateBarcodeError } from "@/lib/product-units";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -9,7 +11,11 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 
     const product = await prisma.product.findFirst({
       where: { id: params.id, tenantId: user.tenantId },
-      include: { category: true, stocks: { include: { warehouse: true } } },
+      include: {
+        category: true,
+        stocks: { include: { warehouse: true } },
+        units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } },
+      },
     });
     if (!product) return NextResponse.json({ message: "Produk tidak ditemukan" }, { status: 404 });
 
@@ -37,6 +43,10 @@ const updateSchema = z.object({
     .optional()
     .transform((v) => (v === "" ? null : v)),
   isActive: z.boolean().optional(),
+  // kalau field ini dikirim (termasuk array kosong), satuan tambahan produk disamakan
+  // dengan isinya (lihat lib/product-units.ts syncProductUnits). Kalau tidak dikirim
+  // sama sekali, satuan tambahan yang ada sekarang tidak disentuh.
+  units: z.array(unitSchema).optional(),
 });
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
@@ -51,11 +61,29 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (!parsed.success) {
       return NextResponse.json({ message: "Data tidak valid", errors: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
+    const { units, ...productData } = parsed.data;
 
-    const updated = await prisma.product.update({ where: { id: params.id }, data: parsed.data });
+    const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      if (units) {
+        await assertUnitBarcodesAvailable(tx, user.tenantId, units, params.id);
+      }
+
+      await tx.product.update({ where: { id: params.id }, data: productData });
+
+      if (units) {
+        await syncProductUnits(tx, user.tenantId, params.id, units);
+      }
+
+      return tx.product.findUniqueOrThrow({
+        where: { id: params.id },
+        include: { units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } } },
+      });
+    });
+
     return NextResponse.json({ message: "Produk berhasil diperbarui", data: updated });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
+    if (err instanceof DuplicateBarcodeError) return NextResponse.json({ message: err.message }, { status: 409 });
     console.error("update product error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }
