@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { adjustStock } from "@/lib/inventory";
 import { assertUnitBarcodesAvailable, syncProductUnits, unitSchema, DuplicateBarcodeError } from "@/lib/product-units";
+import { syncProductPrices, productPriceSchema, InvalidPriceLevelError } from "@/lib/product-prices";
 
 export async function GET(req: NextRequest) {
   try {
@@ -40,6 +41,7 @@ export async function GET(req: NextRequest) {
           category: true,
           stocks: { include: { warehouse: true } },
           units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } },
+          prices: true,
         },
         orderBy: { name: "asc" },
         skip: (page - 1) * pageSize,
@@ -91,6 +93,8 @@ const createSchema = z.object({
     .optional(),
   // satuan jual tambahan opsional (mis. "Dus" = 24 x satuan dasar), lihat lib/product-units.ts
   units: z.array(unitSchema).optional(),
+  // harga per level opsional (mis. harga Grosir beda dari sellPrice/"Umum"), lihat lib/product-prices.ts
+  prices: z.array(productPriceSchema).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -133,6 +137,10 @@ export async function POST(req: NextRequest) {
         await syncProductUnits(tx, user.tenantId, newProduct.id, data.units);
       }
 
+      if (data.prices && data.prices.length > 0) {
+        await syncProductPrices(tx, user.tenantId, newProduct.id, data.prices);
+      }
+
       if (data.initialStock && data.initialStock.quantity > 0) {
         await adjustStock(tx, {
           tenantId: user.tenantId,
@@ -147,13 +155,14 @@ export async function POST(req: NextRequest) {
         });
       }
 
-      return tx.product.findUniqueOrThrow({ where: { id: newProduct.id }, include: { units: true } });
+      return tx.product.findUniqueOrThrow({ where: { id: newProduct.id }, include: { units: true, prices: true } });
     });
 
     return NextResponse.json({ message: "Produk berhasil dibuat", data: product }, { status: 201 });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
     if (err instanceof DuplicateBarcodeError) return NextResponse.json({ message: err.message }, { status: 409 });
+    if (err instanceof InvalidPriceLevelError) return NextResponse.json({ message: err.message }, { status: 400 });
     console.error("create product error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }

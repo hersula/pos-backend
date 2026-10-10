@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 import { assertUnitBarcodesAvailable, syncProductUnits, unitSchema, DuplicateBarcodeError } from "@/lib/product-units";
+import { syncProductPrices, productPriceSchema, InvalidPriceLevelError } from "@/lib/product-prices";
 
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   try {
@@ -15,6 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
         category: true,
         stocks: { include: { warehouse: true } },
         units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } },
+        prices: true,
       },
     });
     if (!product) return NextResponse.json({ message: "Produk tidak ditemukan" }, { status: 404 });
@@ -47,6 +49,9 @@ const updateSchema = z.object({
   // dengan isinya (lihat lib/product-units.ts syncProductUnits). Kalau tidak dikirim
   // sama sekali, satuan tambahan yang ada sekarang tidak disentuh.
   units: z.array(unitSchema).optional(),
+  // sama seperti units: dikirim (termasuk array kosong) -> harga per level disamakan
+  // dengan isinya (lihat lib/product-prices.ts). Tidak dikirim -> tidak disentuh.
+  prices: z.array(productPriceSchema).optional(),
 });
 
 export async function PUT(req: NextRequest, { params }: { params: { id: string } }) {
@@ -61,7 +66,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
     if (!parsed.success) {
       return NextResponse.json({ message: "Data tidak valid", errors: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
-    const { units, ...productData } = parsed.data;
+    const { units, prices, ...productData } = parsed.data;
 
     const updated = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
       if (units) {
@@ -74,9 +79,16 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
         await syncProductUnits(tx, user.tenantId, params.id, units);
       }
 
+      if (prices) {
+        await syncProductPrices(tx, user.tenantId, params.id, prices);
+      }
+
       return tx.product.findUniqueOrThrow({
         where: { id: params.id },
-        include: { units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } } },
+        include: {
+          units: { where: { isActive: true }, orderBy: { conversionQty: "asc" } },
+          prices: true,
+        },
       });
     });
 
@@ -84,6 +96,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
     if (err instanceof DuplicateBarcodeError) return NextResponse.json({ message: err.message }, { status: 409 });
+    if (err instanceof InvalidPriceLevelError) return NextResponse.json({ message: err.message }, { status: 400 });
     console.error("update product error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }

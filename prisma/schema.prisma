@@ -43,6 +43,7 @@ model Tenant {
   warehouses          Warehouse[]
   categories          Category[]
   products            Product[]
+  priceLevels         PriceLevel[]
   suppliers           Supplier[]
   customers           Customer[]
   sales               Sale[]
@@ -194,8 +195,43 @@ model Product {
   stockMovements     StockMovement[]
   purchaseOrderItems PurchaseOrderItem[]
   units              ProductUnit[]
+  prices             ProductPrice[]
 
   @@map("products")
+}
+
+// Master level harga per tenant (mis. "Umum", "Grosir", "Member"), dipilih manual
+// oleh kasir per transaksi di halaman Kasir. "Umum"/default TIDAK punya baris di
+// sini -- itu cukup Product.sellPrice; tabel ini cuma utk level TAMBAHAN di luar itu.
+model PriceLevel {
+  id        String   @id @default(uuid())
+  tenantId  String   @map("tenant_id")
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  tenant Tenant         @relation(fields: [tenantId], references: [id])
+  prices ProductPrice[]
+
+  @@map("price_levels")
+}
+
+// Override harga jual produk per level (hanya utk satuan DASAR produk -- satuan
+// tambahan di ProductUnit tetap 1 harga tunggal, tidak ikut level). Tidak ada baris
+// di sini utk suatu produk+level = pakai Product.sellPrice (harga "Umum") sbg fallback.
+// Aman di-cascade-delete krn SaleItem.unitPrice sudah snapshot angka final, tidak
+// pernah merujuk balik ke sini -- hapus PriceLevel tidak merusak histori transaksi.
+model ProductPrice {
+  id           String  @id @default(uuid())
+  tenantId     String  @map("tenant_id")
+  productId    String  @map("product_id")
+  priceLevelId String  @map("price_level_id")
+  sellPrice    Decimal @map("sell_price") @db.Decimal(14, 2)
+
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceLevel PriceLevel @relation(fields: [priceLevelId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, priceLevelId])
+  @@map("product_prices")
 }
 
 // Satuan jual/beli tambahan di luar satuan dasar produk (Product.unit), mis.
