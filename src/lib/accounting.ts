@@ -164,6 +164,39 @@ export async function postSaleJournal(
 }
 
 /**
+ * Jurnal pelunasan piutang penjualan (dipanggil dari POST /api/sales/:id/payments).
+ *   Debit  Kas/Bank       = amount (Kas untuk CASH, Bank untuk metode non-tunai)
+ *   Kredit Piutang Usaha  = amount
+ * `amount` harus sudah dibatasi sebesar sisa piutang (kelebihan = kembalian, tidak dijurnal).
+ */
+export async function postSalePaymentJournal(
+  tx: TxClient,
+  params: {
+    tenantId: string;
+    saleId: string;
+    invoiceNo: string;
+    entryDate: Date;
+    amount: number;
+    method: "CASH" | "DEBIT" | "CREDIT" | "QRIS" | "TRANSFER" | "EWALLET";
+  }
+) {
+  const { tenantId, saleId, invoiceNo, entryDate, amount, method } = params;
+  if (amount <= 0) return null;
+
+  return createJournalEntry(tx, {
+    tenantId,
+    entryDate,
+    referenceType: "SALE_PAYMENT",
+    referenceId: saleId,
+    description: `Pelunasan piutang ${invoiceNo}`,
+    lines: [
+      { accountCode: method === "CASH" ? ACCOUNT_CODES.KAS : ACCOUNT_CODES.BANK, debit: amount },
+      { accountCode: ACCOUNT_CODES.PIUTANG_USAHA, credit: amount },
+    ],
+  });
+}
+
+/**
  * Jurnal pembelian saat PO diterima (dipanggil dari POST /api/purchase-orders/:id/receive).
  * Akun kredit tergantung metode pembayaran yang dipilih saat PO dibuat:
  *   - CASH     -> Debit Persediaan / Kredit Kas       (lunas seketika)

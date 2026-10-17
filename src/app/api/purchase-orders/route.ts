@@ -50,6 +50,12 @@ export async function POST(req: NextRequest) {
 
     const warehouse = await prisma.warehouse.findFirst({ where: { id: warehouseId, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang tidak ditemukan" }, { status: 404 });
+    if (warehouse.type === "CONSIGNMENT") {
+      return NextResponse.json(
+        { message: "Gudang konsinyasi dikelola otomatis lewat dokumen konsinyasi dan tidak bisa dipakai untuk pembelian.", code: "CONSIGNMENT_WAREHOUSE" },
+        { status: 400 }
+      );
+    }
 
     // Ambil produk + satuan tambahannya utk validasi productUnitId & snapshot konversi
     const productIds = items.map((it) => it.productId);

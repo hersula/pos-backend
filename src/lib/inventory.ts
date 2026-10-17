@@ -59,10 +59,20 @@ export async function adjustStock(
   }
 
   if (existingStock) {
-    await tx.stock.update({
-      where: { id: existingStock.id },
-      data: { quantity: newQty },
-    });
+    if (direction === -1 && !allowNegative) {
+      // Update kondisional (atomik di DB) supaya dua transaksi paralel tidak bisa
+      // sama-sama lolos cek stok lalu membuat stok jadi minus.
+      const res = await tx.stock.updateMany({
+        where: { id: existingStock.id, quantity: { gte: qty } },
+        data: { quantity: { decrement: qty } },
+      });
+      if (res.count === 0) throw new StockInsufficientError(productId, currentQty, qty);
+    } else {
+      await tx.stock.update({
+        where: { id: existingStock.id },
+        data: { quantity: direction === 1 ? { increment: qty } : { decrement: qty } },
+      });
+    }
   } else {
     await tx.stock.create({
       data: { tenantId, productId, warehouseId, quantity: newQty },

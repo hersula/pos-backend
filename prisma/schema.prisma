@@ -50,6 +50,7 @@ model Tenant {
   accounts            ChartOfAccount[]
   expenses            Expense[]
   roleMenuPermissions RoleMenuPermission[]
+  consignmentOrders   ConsignmentOrder[]
 
   @@map("tenants")
 }
@@ -196,6 +197,7 @@ model Product {
   purchaseOrderItems PurchaseOrderItem[]
   units              ProductUnit[]
   prices             ProductPrice[]
+  consignmentItems   ConsignmentItem[]
 
   @@map("products")
 }
@@ -257,17 +259,30 @@ model ProductUnit {
   @@map("product_units")
 }
 
+enum WarehouseType {
+  STORE
+  CONSIGNMENT
+}
+
 model Warehouse {
-  id       String @id @default(uuid())
-  tenantId String @map("tenant_id")
-  name     String
+  id         String        @id @default(uuid())
+  tenantId   String        @map("tenant_id")
+  name       String
+  // STORE = gudang/toko biasa. CONSIGNMENT = stok titipan di outlet customer (dibuat otomatis)
+  type       WarehouseType @default(STORE)
+  customerId String?       @map("customer_id")
 
-  tenant         Tenant          @relation(fields: [tenantId], references: [id])
-  stocks         Stock[]
-  sales          Sale[]
-  stockMovements StockMovement[]
-  purchaseOrders PurchaseOrder[]
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  customer         Customer?          @relation(fields: [customerId], references: [id])
+  stocks           Stock[]
+  sales            Sale[]
+  stockMovements   StockMovement[]
+  purchaseOrders   PurchaseOrder[]
+  consignmentsFrom ConsignmentOrder[] @relation("ConsignmentSource")
+  consignmentsTo   ConsignmentOrder[] @relation("ConsignmentTarget")
 
+  @@unique([tenantId, customerId, type])
+  @@index([tenantId, type])
   @@map("warehouses")
 }
 
@@ -410,8 +425,10 @@ model Customer {
   phone    String?
   email    String?
 
-  tenant Tenant @relation(fields: [tenantId], references: [id])
-  sales  Sale[]
+  tenant            Tenant             @relation(fields: [tenantId], references: [id])
+  sales             Sale[]
+  warehouses        Warehouse[]
+  consignmentOrders ConsignmentOrder[]
 
   @@map("customers")
 }
@@ -429,33 +446,37 @@ enum SaleStatus {
 }
 
 model Sale {
-  id             String       @id @default(uuid())
-  tenantId       String       @map("tenant_id")
-  warehouseId    String       @map("warehouse_id")
-  customerId     String?      @map("customer_id")
-  invoiceNo      String       @map("invoice_no")
-  cashierId      String       @map("cashier_id")
-  subtotal       Decimal      @default(0) @db.Decimal(14, 2)
-  discountType   DiscountType @default(NOMINAL) @map("discount_type")
-  discountValue  Decimal      @default(0) @map("discount_value") @db.Decimal(14, 2)
-  discountAmount Decimal      @default(0) @map("discount_amount") @db.Decimal(14, 2)
-  taxPercent     Decimal      @default(11) @map("tax_percent") @db.Decimal(5, 2)
-  taxAmount      Decimal      @default(0) @map("tax_amount") @db.Decimal(14, 2)
-  grandTotal     Decimal      @default(0) @map("grand_total") @db.Decimal(14, 2)
-  paidTotal      Decimal      @default(0) @map("paid_total") @db.Decimal(14, 2)
-  changeAmount   Decimal      @default(0) @map("change_amount") @db.Decimal(14, 2)
-  status         SaleStatus   @default(PAID)
-  note           String?
-  createdAt      DateTime     @default(now()) @map("created_at")
+  id                 String       @id @default(uuid())
+  tenantId           String       @map("tenant_id")
+  warehouseId        String       @map("warehouse_id")
+  customerId         String?      @map("customer_id")
+  invoiceNo          String       @map("invoice_no")
+  cashierId          String       @map("cashier_id")
+  subtotal           Decimal      @default(0) @db.Decimal(14, 2)
+  discountType       DiscountType @default(NOMINAL) @map("discount_type")
+  discountValue      Decimal      @default(0) @map("discount_value") @db.Decimal(14, 2)
+  discountAmount     Decimal      @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxPercent         Decimal      @default(11) @map("tax_percent") @db.Decimal(5, 2)
+  taxAmount          Decimal      @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  grandTotal         Decimal      @default(0) @map("grand_total") @db.Decimal(14, 2)
+  paidTotal          Decimal      @default(0) @map("paid_total") @db.Decimal(14, 2)
+  changeAmount       Decimal      @default(0) @map("change_amount") @db.Decimal(14, 2)
+  status             SaleStatus   @default(PAID)
+  note               String?
+  consignmentOrderId String?      @map("consignment_order_id")
+  createdAt          DateTime     @default(now()) @map("created_at")
 
-  tenant    Tenant        @relation(fields: [tenantId], references: [id])
-  warehouse Warehouse     @relation(fields: [warehouseId], references: [id])
-  customer  Customer?     @relation(fields: [customerId], references: [id])
-  cashier   User          @relation("CashierSales", fields: [cashierId], references: [id])
-  items     SaleItem[]
-  payments  SalePayment[]
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id])
+  consignmentOrder      ConsignmentOrder?      @relation(fields: [consignmentOrderId], references: [id])
+  consignmentSettlement ConsignmentSettlement?
+  warehouse             Warehouse              @relation(fields: [warehouseId], references: [id])
+  customer              Customer?              @relation(fields: [customerId], references: [id])
+  cashier               User                   @relation("CashierSales", fields: [cashierId], references: [id])
+  items                 SaleItem[]
+  payments              SalePayment[]
 
   @@unique([tenantId, invoiceNo])
+  @@index([consignmentOrderId])
   @@map("sales")
 }
 
@@ -582,4 +603,90 @@ model PlatformSetting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("platform_settings")
+}
+
+// ==================================================
+// KONSINYASI (barang milik tenant dititipkan ke customer/outlet)
+// ==================================================
+
+enum ConsignmentStatus {
+  DRAFT
+  SENT
+  PARTIALLY_SETTLED
+  SETTLED
+  CANCELLED
+}
+
+enum ConsignmentSettlementType {
+  SALE
+  RETURN
+}
+
+model ConsignmentOrder {
+  id                 String            @id @default(uuid())
+  tenantId           String            @map("tenant_id")
+  consignmentNo      String            @map("consignment_no")
+  customerId         String            @map("customer_id")
+  sourceWarehouseId  String            @map("source_warehouse_id")
+  consignWarehouseId String            @map("consign_warehouse_id")
+  status             ConsignmentStatus @default(DRAFT)
+  sentAt             DateTime?         @map("sent_at")
+  dueDate            DateTime?         @map("due_date")
+  note               String?           @db.Text
+  cancelReason       String?           @map("cancel_reason") @db.Text
+  createdById        String            @map("created_by_id")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id])
+  customer         Customer                @relation(fields: [customerId], references: [id])
+  sourceWarehouse  Warehouse               @relation("ConsignmentSource", fields: [sourceWarehouseId], references: [id])
+  consignWarehouse Warehouse               @relation("ConsignmentTarget", fields: [consignWarehouseId], references: [id])
+  items            ConsignmentItem[]
+  settlements      ConsignmentSettlement[]
+  sales            Sale[]
+
+  @@unique([tenantId, consignmentNo])
+  @@index([tenantId, status])
+  @@index([tenantId, customerId])
+  @@map("consignment_orders")
+}
+
+model ConsignmentItem {
+  id                    String  @id @default(uuid())
+  consignmentOrderId    String  @map("consignment_order_id")
+  productId             String  @map("product_id")
+  productUnitId         String? @map("product_unit_id")
+  unitLabel             String? @map("unit_label")
+  conversionQtySnapshot Int     @default(1) @map("conversion_qty_snapshot")
+  qtySent               Int     @map("qty_sent")
+  baseQtySent           Int     @map("base_qty_sent")
+  baseQtySold           Int     @default(0) @map("base_qty_sold")
+  baseQtyReturned       Int     @default(0) @map("base_qty_returned")
+  agreedUnitPrice       Decimal @map("agreed_unit_price") @db.Decimal(14, 2)
+
+  consignmentOrder ConsignmentOrder @relation(fields: [consignmentOrderId], references: [id], onDelete: Cascade)
+  product          Product          @relation(fields: [productId], references: [id])
+
+  @@index([consignmentOrderId])
+  @@map("consignment_items")
+}
+
+model ConsignmentSettlement {
+  id                 String                    @id @default(uuid())
+  tenantId           String                    @map("tenant_id")
+  consignmentOrderId String                    @map("consignment_order_id")
+  type               ConsignmentSettlementType
+  saleId             String?                   @unique @map("sale_id")
+  note               String?
+  voidedAt           DateTime?                 @map("voided_at")
+  createdById        String                    @map("created_by_id")
+  createdAt          DateTime                  @default(now()) @map("created_at")
+  lines              Json // [{ consignmentItemId, baseQty }]
+
+  consignmentOrder ConsignmentOrder @relation(fields: [consignmentOrderId], references: [id])
+  sale             Sale?            @relation(fields: [saleId], references: [id])
+
+  @@index([tenantId, consignmentOrderId])
+  @@map("consignment_settlements")
 }

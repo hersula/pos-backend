@@ -6,8 +6,13 @@ import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 export async function GET(req: NextRequest) {
   try {
     const user = getTenantUserFromRequest(req);
+    // Default hanya gudang toko (STORE) supaya kasir/checkout tidak melihat gudang konsinyasi outlet.
+    const typeParam = (new URL(req.url).searchParams.get("type") ?? "STORE").toUpperCase();
+    if (!["STORE", "CONSIGNMENT", "ALL"].includes(typeParam)) {
+      return NextResponse.json({ message: "Parameter type harus STORE, CONSIGNMENT, atau ALL" }, { status: 400 });
+    }
     const warehouses = await prisma.warehouse.findMany({
-      where: { tenantId: user.tenantId },
+      where: { tenantId: user.tenantId, ...(typeParam === "ALL" ? {} : { type: typeParam as "STORE" | "CONSIGNMENT" }) },
       orderBy: { name: "asc" },
     });
     return NextResponse.json({ data: warehouses });

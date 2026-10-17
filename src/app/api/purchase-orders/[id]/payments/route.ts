@@ -93,6 +93,9 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     return NextResponse.json({ message: "Pembayaran hutang berhasil dicatat", data: updated });
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
+    if ((err as { code?: string })?.code === "P2034") {
+      return NextResponse.json({ message: "Terjadi konflik pembayaran paralel, silakan coba lagi", code: "CONCURRENT_UPDATE" }, { status: 409 });
+    }
     console.error("pay purchase order debt error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }

@@ -3,10 +3,9 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
-import { adjustStock, StockInsufficientError } from "@/lib/inventory";
-import { calculateSaleTotals, generateInvoiceNumber } from "@/lib/sales";
-import { postSaleJournal } from "@/lib/accounting";
-import { checkFreeTransactionLimit, FREE_DAILY_TRANSACTION_LIMIT } from "@/lib/subscription";
+import { StockInsufficientError } from "@/lib/inventory";
+import { calculateSaleTotals } from "@/lib/sales";
+import { createSaleInTx, freeLimitBlock } from "@/lib/sale-service";
 
 // ================= GET — riwayat penjualan =================
 export async function GET(req: NextRequest) {
@@ -95,23 +94,9 @@ export async function POST(req: NextRequest) {
     const user = getTenantUserFromRequest(req);
     requireRole(user, ["OWNER", "MANAGER", "KASIR"]);
 
-    // Batasi 10 transaksi/hari untuk tenant paket FREE. Tenant SUBSCRIBE (baik
-    // masih trial maupun sudah bayar) tidak kena batas ini.
-    const tenant = await prisma.tenant.findUnique({ where: { id: user.tenantId }, select: { planType: true } });
-    if (tenant?.planType === "FREE") {
-      const limitCheck = await checkFreeTransactionLimit(user.tenantId);
-      if (!limitCheck.allowed) {
-        return NextResponse.json(
-          {
-            message: `Paket Gratis dibatasi ${FREE_DAILY_TRANSACTION_LIMIT} transaksi per hari. Kamu sudah mencapai batas ini hari ini — upgrade ke Berlangganan untuk transaksi tanpa batas.`,
-            code: "FREE_LIMIT_REACHED",
-            used: limitCheck.used,
-            limit: limitCheck.limit,
-          },
-          { status: 403 }
-        );
-      }
-    }
+    // Batasi 10 transaksi/hari untuk tenant paket FREE (SUBSCRIBE tidak kena batas).
+    const limitBlock = await freeLimitBlock(user.tenantId);
+    if (limitBlock) return NextResponse.json(limitBlock, { status: 403 });
 
     const parsed = createSaleSchema.safeParse(await req.json());
     if (!parsed.success) {
@@ -121,6 +106,16 @@ export async function POST(req: NextRequest) {
 
     const warehouse = await prisma.warehouse.findFirst({ where: { id: data.warehouseId, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang/toko tidak ditemukan" }, { status: 404 });
+    if (warehouse.type === "CONSIGNMENT") {
+      return NextResponse.json(
+        { message: "Gudang konsinyasi tidak bisa dipakai untuk penjualan biasa. Gunakan pencatatan terjual pada dokumen konsinyasi.", code: "CONSIGNMENT_WAREHOUSE" },
+        { status: 400 }
+      );
+    }
+    if (data.customerId) {
+      const customer = await prisma.customer.findFirst({ where: { id: data.customerId, tenantId: user.tenantId }, select: { id: true } });
+      if (!customer) return NextResponse.json({ message: "Pelanggan tidak ditemukan" }, { status: 404 });
+    }
 
     // Ambil semua produk sekaligus (beserta satuan tambahannya) utk validasi kepemilikan tenant & harga default
     const productIds = data.items.map((it) => it.productId);
@@ -162,101 +157,24 @@ export async function POST(req: NextRequest) {
       taxPercent: data.taxPercent,
     });
 
-    const paidTotal = round2(data.payments.reduce((sum, p) => sum + p.amount, 0));
-    const changeAmount = paidTotal > totals.grandTotal ? round2(paidTotal - totals.grandTotal) : 0;
-    const status: "PAID" | "PARTIAL" = paidTotal >= totals.grandTotal ? "PAID" : "PARTIAL";
+    const costPriceByProduct = new Map(products.map((pr) => [pr.id, Number(pr.costPrice)]));
 
-    const sale = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-      const invoiceNo = await generateInvoiceNumber(tx, user.tenantId);
-
-      const newSale = await tx.sale.create({
-        data: {
-          tenantId: user.tenantId,
-          warehouseId: data.warehouseId,
-          customerId: data.customerId,
-          invoiceNo,
-          cashierId: user.userId,
-          subtotal: totals.subtotal,
-          discountType: data.discountType,
-          discountValue: data.discountValue,
-          discountAmount: totals.discountAmount,
-          taxPercent: data.taxPercent,
-          taxAmount: totals.taxAmount,
-          grandTotal: totals.grandTotal,
-          paidTotal,
-          changeAmount,
-          status,
-          note: data.note,
-          items: {
-            create: resolvedItems.map((item) => ({
-              productId: item.productId,
-              productUnitId: item.productUnitId,
-              unitLabel: item.unitLabel,
-              conversionQty: item.conversionQty,
-              qty: item.qty,
-              unitPrice: item.unitPrice,
-              discountAmount: item.discountAmount ?? 0,
-              subtotal: item.qty * item.unitPrice - (item.discountAmount ?? 0),
-            })),
-          },
-          payments: {
-            create: data.payments.map((p) => ({
-              method: p.method,
-              amount: p.amount,
-              referenceNo: p.referenceNo,
-            })),
-          },
-        },
-        include: {
-          items: { include: { product: true } },
-          payments: true,
-          cashier: { select: { id: true, name: true } },
-          customer: true,
-          warehouse: true,
-          tenant: { select: { businessName: true, address: true, phone: true } },
-        },
-      });
-
-      // Kurangi stok untuk setiap item, selalu dalam satuan dasar (qty x conversionQty) —
-      // 2 Dus terjual @ konversi 24 Botol/Dus = 48 Botol dikurangi dari Stock, bukan 2.
-      for (const item of resolvedItems) {
-        await adjustStock(tx, {
-          tenantId: user.tenantId,
-          productId: item.productId,
-          warehouseId: data.warehouseId,
-          type: "OUT",
-          qty: item.qty * item.conversionQty,
-          direction: -1,
-          referenceType: "SALE",
-          referenceId: newSale.id,
-          note: `Penjualan ${invoiceNo}`,
-          createdBy: user.userId,
-        });
-      }
-
-      // Jurnal akunting otomatis: Kas/Bank & Piutang (debit) vs Pendapatan & PPN (kredit),
-      // plus HPP (debit) vs Persediaan (kredit) dari harga modal barang yang terjual.
-      // costPrice produk selalu per satuan dasar, jadi HPP juga ikut dikali conversionQty.
-      const cogsAmount = resolvedItems.reduce((sum, item) => {
-        const product = productMap.get(item.productId)!;
-        return sum + item.qty * item.conversionQty * Number(product.costPrice);
-      }, 0);
-
-      await postSaleJournal(tx, {
+    const sale = await prisma.$transaction((tx: Prisma.TransactionClient) =>
+      createSaleInTx(tx, {
         tenantId: user.tenantId,
-        saleId: newSale.id,
-        invoiceNo,
-        entryDate: newSale.createdAt,
+        userId: user.userId,
+        warehouseId: data.warehouseId,
+        customerId: data.customerId,
+        items: resolvedItems,
+        costPriceByProduct,
+        totals,
+        discountType: data.discountType,
+        discountValue: data.discountValue,
+        taxPercent: data.taxPercent,
         payments: data.payments,
-        taxableAmount: totals.taxableAmount,
-        taxAmount: totals.taxAmount,
-        grandTotal: totals.grandTotal,
-        paidTotal,
-        cogsAmount,
-      });
-
-      return newSale;
-    });
+        note: data.note,
+      })
+    );
 
     return NextResponse.json(
       { message: "Transaksi berhasil disimpan", data: sale },
@@ -272,6 +190,3 @@ export async function POST(req: NextRequest) {
   }
 }
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
-}

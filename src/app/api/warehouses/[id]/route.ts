@@ -12,6 +12,9 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     const warehouse = await prisma.warehouse.findFirst({ where: { id: params.id, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang tidak ditemukan" }, { status: 404 });
+    if (warehouse.type === "CONSIGNMENT") {
+      return NextResponse.json({ message: "Gudang konsinyasi dikelola otomatis dan tidak bisa diubah", code: "CONSIGNMENT_WAREHOUSE" }, { status: 409 });
+    }
 
     const parsed = updateSchema.safeParse(await req.json());
     if (!parsed.success) return NextResponse.json({ message: "Data tidak valid" }, { status: 400 });
@@ -32,6 +35,9 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
 
     const warehouse = await prisma.warehouse.findFirst({ where: { id: params.id, tenantId: user.tenantId } });
     if (!warehouse) return NextResponse.json({ message: "Gudang tidak ditemukan" }, { status: 404 });
+    if (warehouse.type === "CONSIGNMENT") {
+      return NextResponse.json({ message: "Gudang konsinyasi dikelola otomatis dan tidak bisa dihapus", code: "CONSIGNMENT_WAREHOUSE" }, { status: 409 });
+    }
 
     const stockCount = await prisma.stock.count({ where: { warehouseId: params.id, quantity: { gt: 0 } } });
     if (stockCount > 0) {
