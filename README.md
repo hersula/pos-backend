@@ -486,7 +486,45 @@ curl -X PUT http://localhost:3000/api/admin/settings/whatsapp \
 
 ---
 
-## 9. Catatan Teknis Umum
+## 9. Modul Stock Opname
+
+Penghitungan stok fisik per gudang. Kontrak lengkap: [`docs/api-contract.md`](docs/api-contract.md) (bagian "API Contract: Stock Opname").
+
+| Method | Path | Role | Fungsi |
+|---|---|---|---|
+| GET | `/api/stock-opnames` | semua role | Daftar sesi (`status`, `warehouseId`, `page`, `pageSize`) |
+| POST | `/api/stock-opnames` | OWNER, MANAGER | Buat sesi + snapshot stok (`warehouseId`, opsional `categoryId`, `note`) |
+| GET | `/api/stock-opnames/{id}` | semua role | Detail + item |
+| PATCH | `/api/stock-opnames/{id}/items` | OWNER, MANAGER, GUDANG, KASIR | Simpan hitungan batch (`countedQty` 0..2.000.000.000 atau `null`) |
+| POST | `/api/stock-opnames/{id}/finalize` | OWNER, MANAGER | Terapkan selisih; body opsional `{ "clampToZero": true }` |
+| POST | `/api/stock-opnames/{id}/cancel` | OWNER, MANAGER | Batalkan Draft, body `{ "reason": "3..500 karakter" }` |
+
+Aturan penting:
+- Satu sesi `DRAFT` per gudang. Duplikat: 409 `DRAFT_EXISTS` (`details.opnameId`). Gudang `CONSIGNMENT` ditolak 400 `CONSIGNMENT_WAREHOUSE`.
+- Finalisasi menerapkan selisih relatif (`diff = counted - systemQty`) ke stok saat finalisasi, membuat `StockMovement` `ADJUSTMENT` dengan `referenceType = STOCK_OPNAME`. Item belum dihitung dilewati. Minimal satu item terhitung (`NO_COUNTED_ITEMS`).
+- Bila hasil stok negatif: 409 `STOCK_CONFLICT` tanpa perubahan apa pun. Ulangi dengan `clampToZero: true` untuk menahan stok di 0.
+- Status selain `DRAFT` tidak bisa diubah (409 `INVALID_STATUS`). Tidak ada jurnal akuntansi (MVP).
+
+Contoh (belum diverifikasi terhadap DB nyata):
+```bash
+curl -X POST http://localhost:3000/api/stock-opnames -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"warehouseId":"<uuid>","note":"Opname akhir bulan"}'
+curl -X PATCH http://localhost:3000/api/stock-opnames/<id>/items -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"items":[{"itemId":"<uuid>","countedQty":8}]}'
+curl -X POST http://localhost:3000/api/stock-opnames/<id>/finalize -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"clampToZero":false}'
+```
+
+### Catatan migrasi (rilis)
+Migrasi `prisma/migrations/20261018000000_add_stock_opname` bersifat additive (hanya `CREATE TABLE` dan FK untuk `stock_opnames` dan `stock_opname_items`; tabel lain tidak berubah). **Belum diterapkan ke database mana pun.**
+1. Backup database.
+2. Saat rilis, jalankan `npx prisma migrate deploy` di lingkungan target.
+3. Jalankan `npx prisma generate`, lalu deploy kode.
+4. Uji: skrip `tests/stock-opname-e2e.mjs` terhadap database uji terpisah (bukan produksi).
+
+Status uji: belum ada uji dinamis. Lihat `CHANGELOG.md`.
+
+## 10. Catatan Teknis Umum
 
 - Token access berisi `tenantId` + `role` — dipakai di modul Inventori/Penjualan/Akunting agar semua query otomatis `WHERE tenant_id = ...`. Pola untuk route baru:
   ```ts
@@ -498,7 +536,7 @@ curl -X PUT http://localhost:3000/api/admin/settings/whatsapp \
 - Ganti `SEED_SUPER_ADMIN_PASSWORD` di `.env` sebelum deploy ke production, lalu hapus/nonaktifkan skrip seed atau lindungi dengan env check.
 - Sebelum `npm run build` / `npm run dev`, pastikan `npx prisma generate` sukses dulu (otomatis jalan lewat `npm install`, tapi jalankan manual kalau ada perubahan di `schema.prisma`). Tanpa ini, TypeScript akan error karena tipe seperti `Prisma.SaleWhereInput` belum ter-generate.
 
-## 10. Sisa Roadmap
+## 11. Sisa Roadmap
 
 Backend API (Fase 1–4) dan Admin Panel web (Fase 5) sudah lengkap. Yang belum dibangun:
 

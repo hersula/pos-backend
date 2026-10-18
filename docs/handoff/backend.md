@@ -1,4 +1,35 @@
-# Serah terima: backend (fitur Konsinyasi)
+# Serah terima: backend (modul Stock Opname)
+
+- Status: SELESAI (kontrak + skema + endpoint). Belum diuji terhadap DB nyata; migrasi TIDAK dijalankan.
+- Verifikasi: `npx prisma validate` + `prisma generate` OK; `npx tsc --noEmit`: 0 error di file opname. Ada 9 error TS yang SUDAH ADA di file belum-ter-commit milik pekerjaan lain (`src/app/api/products/[id]/prices|units`, `src/lib/units.ts`: skema ProductPrice/ProductUnit/PriceLevel tidak cocok), sehingga `npm run build` tidak dijalankan/akan gagal sampai itu beres. Bukan bagian tugas ini.
+
+## File
+- Kontrak: `docs/api-contract.md` (bagian Stock Opname di akhir), salinan `/home/sule/Projects/pos-mobile/docs/api-contract-stock-opname.md`
+- Skema: `prisma/schema.prisma` (enum StockOpnameStatus, StockOpname, StockOpnameItem; relasi balik di Tenant/Warehouse/Product), migrasi `prisma/migrations/20261018000000_add_stock_opname/migration.sql` (hanya CREATE TABLE/FK, dibuat via `prisma migrate diff`)
+- Kode: `src/lib/stock-opname.ts`, `src/app/api/stock-opnames/{route.ts,[id]/route.ts,[id]/items/route.ts,[id]/finalize/route.ts,[id]/cancel/route.ts}`
+
+## Menjalankan
+`npx prisma generate && npx tsc --noEmit`; terapkan migrasi di lingkungan yang disetujui: `npx prisma migrate deploy`.
+
+## Keputusan penting
+- Finalisasi menerapkan selisih RELATIF (`diff = counted - systemQty`) ke stok saat ini, bukan menimpa stok; transaksi setelah snapshot tidak hilang. `stockBeforeFinalize` dan `appliedDiff` disimpan per item; detail DRAFT menampilkan `currentQty` + `stockChanged`.
+- Hasil negatif => 409 `STOCK_CONFLICT` (tanpa perubahan); opsi `clampToZero` menahan stok di 0.
+- Item belum dihitung dilewati; minimal 1 item terhitung (`NO_COUNTED_ITEMS`).
+- Snapshot = semua produk aktif tenant (stok 0 bila tak ada baris stok), filter kategori opsional. Gudang CONSIGNMENT ditolak.
+- Role: create/finalize/cancel OWNER+MANAGER; hitung OWNER/MANAGER/GUDANG/KASIR; baca semua role. Isolasi tenant: semua query memakai `tenantId` JWT, ID asing => 404. Row lock `FOR UPDATE` pada sesi mencegah finalisasi ganda/paralel.
+- `unitCost` snapshot dari `Product.costPrice` (nilai selisih). Tanpa jurnal akuntansi (MVP). Memakai ulang `ConsignError/parseBody/handleConsignError` dari `lib/consignment.ts` (alias OpnameError).
+- Peringatan: GUDANG tidak disebut di brief tetapi diizinkan menghitung (pola adjustment manual).
+
+## Belum selesai
+- Tidak ada uji otomatis/uji DB (proyek tanpa framework test; hanya skrip `tests/*.mjs` e2e). 
+
+## Permintaan ke agent lain
+- qc: uji skenario selisih +/-, stok berubah setelah snapshot, STOCK_CONFLICT, finalisasi ganda, isolasi tenant, role KASIR; tambahkan `tests/stock-opname-e2e.mjs`.
+- devops/pengguna: jalankan migrasi di DB setelah review; perbaiki error TS di produk (units/prices) agar build lulus.
+
+---
+(Serah terima sebelumnya, Konsinyasi:)
+
 
 - Status: SELESAI (kode + kontrak). Belum diuji terhadap database nyata (tidak ada DB; migrasi tidak dijalankan).
 - Verifikasi yang dijalankan: `npx prisma validate`, `npx prisma generate`, `npx tsc --noEmit` (bersih), `npm run build` (sukses). Dijalankan dengan `DATABASE_URL` dummy; `.env` asli tidak dibaca. Proyek tidak punya framework test, jadi tidak ada test otomatis baru (lihat permintaan ke qc).
@@ -60,3 +91,11 @@ npm run build
 - BUG-003: transaksi send/settle-sale/return/cancel konsinyasi memakai `{ timeout: 20000, maxWait: 20000 }`.
 - BUG-002: P2034 pada pembayaran paralel (sales dan purchase-orders payments) kini 409, code `CONCURRENT_UPDATE`.
 - Verifikasi: `npx tsc --noEmit` bersih, `npm run build` sukses. Test e2e QC belum dijalankan ulang (butuh DB `qc_consign_test`); regresi test belum ditambahkan.
+
+## Perbaikan QC (BUG-001/003/004/005) - 2026-10-18
+- BUG-001: `assertNoDraft` (src/lib/stock-opname.ts) mengunci baris `warehouses` FOR UPDATE di transaksi POST lalu cek DRAFT => 409 `DRAFT_EXISTS` + `details.opnameId`.
+- BUG-003: finalize mengunci baris `stocks` (FOR UPDATE); `StockInsufficientError` saat penulisan dipetakan ke 409 `STOCK_CONFLICT` (bukan 400 `INSUFFICIENT_STOCK`).
+- BUG-004/005: `summarize` memakai `appliedDiff` untuk item di-clamp; `unchangedItems` tidak lagi menghitung item clamped (stok sudah 0 masuk `clampedItems`).
+- Tambahan: `categoryName` (header & item), `createdByName` (header). Kontrak + salinan pos-mobile diperbarui.
+- Verifikasi: `npx tsc --noEmit` = 9 error lama (prices/units), 0 baru. Belum ada uji DB/otomatis; tidak ada migrasi baru (tanpa perubahan skema). 
+- Catatan: DRAFT lama yang sudah dobel di data existing tidak dibersihkan otomatis.

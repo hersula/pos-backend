@@ -51,6 +51,7 @@ model Tenant {
   expenses            Expense[]
   roleMenuPermissions RoleMenuPermission[]
   consignmentOrders   ConsignmentOrder[]
+  stockOpnames        StockOpname[]
 
   @@map("tenants")
 }
@@ -198,6 +199,7 @@ model Product {
   units              ProductUnit[]
   prices             ProductPrice[]
   consignmentItems   ConsignmentItem[]
+  stockOpnameItems   StockOpnameItem[]
 
   @@map("products")
 }
@@ -280,6 +282,7 @@ model Warehouse {
   purchaseOrders   PurchaseOrder[]
   consignmentsFrom ConsignmentOrder[] @relation("ConsignmentSource")
   consignmentsTo   ConsignmentOrder[] @relation("ConsignmentTarget")
+  stockOpnames     StockOpname[]
 
   @@unique([tenantId, customerId, type])
   @@index([tenantId, type])
@@ -689,4 +692,58 @@ model ConsignmentSettlement {
 
   @@index([tenantId, consignmentOrderId])
   @@map("consignment_settlements")
+}
+
+// ================= Stock Opname =================
+enum StockOpnameStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+model StockOpname {
+  id            String            @id @default(uuid())
+  tenantId      String            @map("tenant_id")
+  opnameNo      String            @map("opname_no")
+  warehouseId   String            @map("warehouse_id")
+  categoryId    String?           @map("category_id") // filter kategori saat snapshot (opsional)
+  status        StockOpnameStatus @default(DRAFT)
+  note          String?           @db.Text
+  cancelReason  String?           @map("cancel_reason") @db.Text
+  createdById   String            @map("created_by_id")
+  completedById String?           @map("completed_by_id")
+  completedAt   DateTime?         @map("completed_at")
+  createdAt     DateTime          @default(now()) @map("created_at")
+  updatedAt     DateTime          @updatedAt @map("updated_at")
+
+  tenant    Tenant            @relation(fields: [tenantId], references: [id])
+  warehouse Warehouse         @relation(fields: [warehouseId], references: [id])
+  items     StockOpnameItem[]
+
+  @@unique([tenantId, opnameNo])
+  @@index([tenantId, status])
+  @@index([tenantId, warehouseId])
+  @@map("stock_opnames")
+}
+
+model StockOpnameItem {
+  id                  String    @id @default(uuid())
+  stockOpnameId       String    @map("stock_opname_id")
+  productId           String    @map("product_id")
+  systemQty           Int       @map("system_qty") // snapshot stok sistem saat sesi dibuat
+  countedQty          Int?      @map("counted_qty") // null = belum dihitung
+  diff                Int       @default(0) // countedQty - systemQty (0 bila belum dihitung)
+  unitCost            Decimal   @default(0) @map("unit_cost") @db.Decimal(14, 2) // snapshot product.costPrice
+  diffValue           Decimal   @default(0) @map("diff_value") @db.Decimal(16, 2) // diff * unitCost
+  stockBeforeFinalize Int?      @map("stock_before_finalize") // stok riil tepat sebelum finalisasi
+  appliedDiff         Int?      @map("applied_diff") // selisih yang benar-benar diterapkan ke Stock
+  countedAt           DateTime? @map("counted_at")
+  countedById         String?   @map("counted_by_id")
+
+  stockOpname StockOpname @relation(fields: [stockOpnameId], references: [id], onDelete: Cascade)
+  product     Product     @relation(fields: [productId], references: [id])
+
+  @@unique([stockOpnameId, productId])
+  @@index([productId])
+  @@map("stock_opname_items")
 }
