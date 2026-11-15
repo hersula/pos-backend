@@ -1,6 +1,3 @@
--- CreateEnum
-CREATE TYPE `AppPlatform` AS ENUM('ANDROID', 'IOS');
-
 -- CreateTable
 CREATE TABLE `app_versions` (
     `id` VARCHAR(191) NOT NULL,
