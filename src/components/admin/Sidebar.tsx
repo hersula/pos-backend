@@ -25,7 +25,10 @@ export default function Sidebar({
       <Link href="/admin/subscriptions" className={`nav-item ${pathname?.startsWith("/admin/subscriptions") ? "active" : ""}`}>
         Langganan
       </Link>
-      <Link href="/admin/settings" className={`nav-item ${pathname?.startsWith("/admin/settings") ? "active" : ""}`}>
+      <Link href="/admin/app-versions" className={`nav-item ${pathname?.startsWith("/admin/app-versions") ? "active" : ""}`}>
+        Versi Aplikasi
+      </Link>
+      <Link href="/admin/settings"className={`nav-item ${pathname?.startsWith("/admin/settings") ? "active" : ""}`}>
         Pengaturan
       </Link>
 

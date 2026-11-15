@@ -165,13 +165,15 @@ model RoleMenuPermission {
 // ==================================================
 
 model Category {
-  id       String @id @default(uuid())
-  tenantId String @map("tenant_id")
+  id       String  @id @default(uuid())
+  tenantId String  @map("tenant_id")
   name     String
+  isActive Boolean @default(true) @map("is_active")
 
   tenant   Tenant    @relation(fields: [tenantId], references: [id])
   products Product[]
 
+  @@index([tenantId, isActive])
   @@map("categories")
 }
 

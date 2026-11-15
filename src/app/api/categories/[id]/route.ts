@@ -4,7 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 
 const updateSchema = z.object({
-  name: z.string().min(2),
+  name: z.string().min(2).optional(),
+  isActive: z.boolean().optional(),
 });
 
 async function assertOwnedByTenant(id: string, tenantId: string) {
@@ -21,7 +22,7 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
 
     const parsed = updateSchema.safeParse(await req.json());
     if (!parsed.success) {
-      return NextResponse.json({ message: "Data tidak valid" }, { status: 400 });
+      return NextResponse.json({ message: "Data tidak valid", errors: parsed.error.flatten().fieldErrors }, { status: 400 });
     }
 
     const updated = await prisma.category.update({
@@ -33,6 +34,33 @@ export async function PUT(req: NextRequest, { params }: { params: { id: string }
   } catch (err) {
     if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
     console.error("update category error:", err);
+    return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
+  }
+}
+
+export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+  try {
+    const user = getTenantUserFromRequest(req);
+    requireRole(user, ["OWNER", "MANAGER"]);
+    await assertOwnedByTenant(params.id, user.tenantId);
+
+    const parsed = updateSchema.safeParse(await req.json());
+    if (!parsed.success) {
+      return NextResponse.json({ message: "Data tidak valid", errors: parsed.error.flatten().fieldErrors }, { status: 400 });
+    }
+
+    const updated = await prisma.category.update({
+      where: { id: params.id },
+      data: {
+        ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+        ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+      },
+    });
+
+    return NextResponse.json({ message: "Kategori berhasil diperbarui", data: updated });
+  } catch (err) {
+    if (err instanceof AuthError) return NextResponse.json({ message: err.message }, { status: err.status });
+    console.error("patch category error:", err);
     return NextResponse.json({ message: "Terjadi kesalahan pada server" }, { status: 500 });
   }
 }

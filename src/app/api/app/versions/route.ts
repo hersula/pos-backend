@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
+import { getAdminFromRequest, AuthError } from "@/lib/auth";
 
 const createVersionSchema = z.object({
   platform: z.enum(["ANDROID", "IOS"]).default("ANDROID"),
@@ -16,12 +16,11 @@ const createVersionSchema = z.object({
 });
 
 /**
- * GET /api/app/versions - List versi aplikasi (admin only)
+ * GET /api/app/versions - List versi aplikasi (admin panel)
  */
 export async function GET(req: NextRequest) {
   try {
-    const user = getTenantUserFromRequest(req);
-    requireRole(user, ["OWNER"]);
+    getAdminFromRequest(req);
 
     const versions = await prisma.appVersion.findMany({
       orderBy: [{ platform: "asc" }, { buildNumber: "desc" }],
@@ -41,12 +40,14 @@ export async function GET(req: NextRequest) {
 }
 
 /**
- * POST /api/app/versions - Buat versi aplikasi baru (admin only)
+ * POST /api/app/versions - Buat versi aplikasi baru (admin panel)
  */
 export async function POST(req: NextRequest) {
   try {
-    const user = getTenantUserFromRequest(req);
-    requireRole(user, ["OWNER"]);
+    const admin = getAdminFromRequest(req);
+    if (admin.role !== "SUPER_ADMIN") {
+      return NextResponse.json({ message: "Hanya Super Admin yang boleh mengelola versi aplikasi" }, { status: 403 });
+    }
 
     const body = await req.json();
     const parsed = createVersionSchema.safeParse(body);

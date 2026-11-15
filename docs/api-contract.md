@@ -282,7 +282,9 @@ Migrasi: `prisma/migrations/20261018000000_add_stock_opname/migration.sql` (hany
 
 ## 0. Konvensi
 - Endpoint publik: `GET /api/app/version` (tanpa JWT, rate-limit friendly)
-- Endpoint admin: `GET|POST /api/app/versions`, `PATCH|DELETE /api/app/versions/{id}` (JWT + OWNER role)
+- Endpoint admin panel: `GET|POST /api/app/versions`, `PATCH|DELETE /api/app/versions/{id}`, `POST /api/app/versions/upload` (JWT admin; GET semua admin, tulis hanya `SUPER_ADMIN`). Token tenant ditolak 403.
+- Unduh APK: `GET /api/app/download/{file}` (publik)
+- UI: panel admin `/admin/app-versions`
 - Platform: `ANDROID` atau `IOS` (default ANDROID)
 - Version format: semver `X.Y.Z` (e.g. `1.3.0`)
 - Tanggal ISO-8601: `2026-11-15T00:00:00.000Z`
@@ -333,10 +335,10 @@ Logika:
 
 Respons 200: `AppVersionCheckResponse`. Tidak pernah 500 (jika error, log dan return data null dengan updateAvailable=false).
 
-### GET `/api/app/versions` (admin: OWNER)
+### GET `/api/app/versions` (admin panel)
 Respons 200: `{ "data": [AppVersion] }` urut platform ASC, buildNumber DESC.
 
-### POST `/api/app/versions` (admin: OWNER)
+### POST `/api/app/versions` (SUPER_ADMIN)
 Body: `{ "platform": "ANDROID|IOS" (opsional, default ANDROID), "version": "X.Y.Z" (wajib), "buildNumber": int (wajib, positif), "minSupportedVersion": "X.Y.Z" (wajib), "mandatory": bool (opsional, default false), "downloadUrl": URL (wajib), "releaseNotes": string (opsional), "isActive": bool (opsional, default true), "releasedAt": ISO datetime (opsional, default now) }`.
 
 Validasi: `version` dan `minSupportedVersion` harus format semver; `buildNumber` positif; `downloadUrl` harus URL valid.
@@ -345,15 +347,25 @@ Unik: `(platform, buildNumber)`. Jika duplikat => 409.
 
 Respons 201: `{ "message": "Versi aplikasi berhasil dibuat", "data": AppVersion }`.
 
-### PATCH `/api/app/versions/{id}` (admin: OWNER)
+### PATCH `/api/app/versions/{id}` (SUPER_ADMIN)
 Body: subset AppVersion (semua field opsional). Validasi field yang dikirim.
 
 Respons 200: `{ "message": "Versi aplikasi berhasil diperbarui", "data": AppVersion }`. 404 jika id tidak ditemukan.
 
-### DELETE `/api/app/versions/{id}` (admin: OWNER)
+### DELETE `/api/app/versions/{id}` (SUPER_ADMIN)
 Soft delete: set `isActive=false`. Tidak menghapus record.
 
 Respons 200: `{ "message": "Versi aplikasi berhasil dihapus", "data": AppVersion }`. 404 jika id tidak ditemukan.
+
+### POST `/api/app/versions/upload` (SUPER_ADMIN)
+`multipart/form-data`: `file` (wajib, `.apk`, maks 300 MB, harus arsip ZIP), `version` & `build` (opsional, dipakai di nama file).
+Disimpan di `storage/releases/` (atau env `RELEASE_DIR`), di luar `public/`.
+
+Respons 201: `{ "message": "Upload APK berhasil", "data": { "path": "/api/app/download/qpos-1.0.1-b2-<unik>.apk", "fileName": "...", "size": 68930866 } }`. `path` relatif; gabungkan dengan origin publik sebagai `downloadUrl` saat POST versi.
+Error 400: bukan multipart / bukan `.apk` / bukan ZIP / terlalu besar.
+
+### GET `/api/app/download/{file}` (publik)
+Stream file APK dengan `Content-Type: application/vnd.android.package-archive` dan `Content-Disposition: attachment`. 404 bila nama tidak valid atau file tidak ada.
 
 ## 3. Skema database
 | Tabel | Kolom |
@@ -361,3 +373,45 @@ Respons 200: `{ "message": "Versi aplikasi berhasil dihapus", "data": AppVersion
 | `app_versions` | id (uuid PK), platform ENUM(ANDROID,IOS) default ANDROID, version VARCHAR(191), buildNumber INT, min_supported_version VARCHAR(191), mandatory BOOL default false, download_url TEXT, release_notes TEXT NULL, is_active BOOL default true, released_at DATETIME(3) default now, created_at DATETIME(3) default now, updated_at DATETIME(3); unik (platform, buildNumber); index (platform, is_active, buildNumber) |
 
 Migrasi: `prisma/migrations/20261115071900_add_app_version/migration.sql`
+
+---
+
+# Kategori Produk — nonaktif tanpa hapus
+
+## 1. Objek Category
+`{ "id": "uuid", "tenantId": "uuid", "name": "string", "isActive": true, "_count": { "products": 5 } }`
+
+## 2. Endpoint
+
+### GET `/api/categories`
+Auth: wajib login (semua role).
+Query: `includeInactive` (opsional, `"true"` untuk menyertakan kategori nonaktif; default hanya kategori aktif — dipakai saat pemilihan produk/kasir).
+
+Respons 200: `{ "data": [Category] }` urut nama ASC.
+
+### POST `/api/categories` (OWNER, MANAGER, GUDANG)
+Body: `{ "name": "string min 2" }`. Kategori baru selalu `isActive=true`.
+
+Respons 201: `{ "message": "Kategori berhasil dibuat", "data": Category }`.
+
+### PUT `/api/categories/{id}` (OWNER, MANAGER, GUDANG)
+Body: `{ "name": "string min 2" (opsional), "isActive": bool (opsional) }`.
+
+Respons 200: `{ "message": "Kategori berhasil diperbarui", "data": Category }`. 404 jika id tidak ditemukan/beda tenant.
+
+### PATCH `/api/categories/{id}` (OWNER, MANAGER)
+Body sama dengan PUT: `{ "name": "string min 2" (opsional), "isActive": bool (opsional) }`. Dipakai layar manajemen kategori untuk toggle aktif/nonaktif tanpa mengubah field lain.
+
+Respons 200: `{ "message": "Kategori berhasil diperbarui", "data": Category }`. 404 jika id tidak ditemukan/beda tenant. 403 jika role selain OWNER/MANAGER.
+
+### DELETE `/api/categories/{id}` (OWNER, MANAGER)
+Tidak berubah: 409 jika masih dipakai produk. Menonaktifkan kategori (PATCH `isActive=false`) adalah cara yang disarankan agar produk yang sudah memakainya tidak terganggu.
+
+## 3. Skema database
+| Tabel | Kolom |
+|---|---|
+| `categories` | id (uuid PK), tenant_id (FK), name, **is_active BOOL default true (baru)**; index (tenant_id, is_active) |
+
+Catatan: kategori nonaktif tidak menghapus/mengubah relasi produk — produk yang memakai kategori nonaktif tetap ada dan tetap bisa dijual; kategori nonaktif hanya disembunyikan dari daftar pemilihan default (`GET /api/categories` tanpa `includeInactive=true`).
+
+Migrasi: `prisma/migrations/20261115080000_add_category_is_active/migration.sql`

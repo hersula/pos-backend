@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
+import { getAdminFromRequest, AuthError } from "@/lib/auth";
 
 const updateVersionSchema = z.object({
   version: z.string().regex(/^\d+\.\d+\.\d+$/, "Format versi harus semver (e.g. 1.0.0)").optional(),
@@ -14,15 +14,17 @@ const updateVersionSchema = z.object({
 });
 
 /**
- * PATCH /api/app/versions/[id] - Update versi aplikasi (admin only)
+ * PATCH /api/app/versions/[id] - Update versi aplikasi (admin panel)
  */
 export async function PATCH(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const user = getTenantUserFromRequest(req);
-    requireRole(user, ["OWNER"]);
+    const admin = getAdminFromRequest(req);
+    if (admin.role !== "SUPER_ADMIN") {
+      return NextResponse.json({ message: "Hanya Super Admin yang boleh mengelola versi aplikasi" }, { status: 403 });
+    }
 
     const { id } = params;
 
@@ -75,15 +77,17 @@ export async function PATCH(
 }
 
 /**
- * DELETE /api/app/versions/[id] - Soft delete versi aplikasi (admin only)
+ * DELETE /api/app/versions/[id] - Soft delete versi aplikasi (admin panel)
  */
 export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
   try {
-    const user = getTenantUserFromRequest(req);
-    requireRole(user, ["OWNER"]);
+    const admin = getAdminFromRequest(req);
+    if (admin.role !== "SUPER_ADMIN") {
+      return NextResponse.json({ message: "Hanya Super Admin yang boleh mengelola versi aplikasi" }, { status: 403 });
+    }
 
     const { id } = params;
 

@@ -6,9 +6,10 @@ import { getTenantUserFromRequest, requireRole, AuthError } from "@/lib/auth";
 export async function GET(req: NextRequest) {
   try {
     const user = getTenantUserFromRequest(req);
+    const includeInactive = req.nextUrl.searchParams.get("includeInactive") === "true";
 
     const categories = await prisma.category.findMany({
-      where: { tenantId: user.tenantId },
+      where: { tenantId: user.tenantId, ...(includeInactive ? {} : { isActive: true }) },
       include: { _count: { select: { products: true } } },
       orderBy: { name: "asc" },
     });
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
     }
 
     const category = await prisma.category.create({
-      data: { tenantId: user.tenantId, name: parsed.data.name },
+      data: { tenantId: user.tenantId, name: parsed.data.name, isActive: true },
     });
 
     return NextResponse.json({ message: "Kategori berhasil dibuat", data: category }, { status: 201 });
