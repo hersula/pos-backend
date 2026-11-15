@@ -275,3 +275,89 @@ Body: `{ "reason": "string 3..500" }` wajib. Hanya `DRAFT`; tidak mengubah stok.
 | `stock_movements` | tidak berubah; memakai `type = ADJUSTMENT`, `reference_type = 'STOCK_OPNAME'` |
 
 Migrasi: `prisma/migrations/20261018000000_add_stock_opname/migration.sql` (hanya CREATE TABLE / FK).
+
+---
+
+# App Version / Auto Update
+
+## 0. Konvensi
+- Endpoint publik: `GET /api/app/version` (tanpa JWT, rate-limit friendly)
+- Endpoint admin: `GET|POST /api/app/versions`, `PATCH|DELETE /api/app/versions/{id}` (JWT + OWNER role)
+- Platform: `ANDROID` atau `IOS` (default ANDROID)
+- Version format: semver `X.Y.Z` (e.g. `1.3.0`)
+- Tanggal ISO-8601: `2026-11-15T00:00:00.000Z`
+
+## 1. Objek
+
+### AppVersion
+```json
+{
+  "id": "uuid",
+  "platform": "ANDROID|IOS",
+  "version": "1.3.0",
+  "buildNumber": 30,
+  "minSupportedVersion": "1.1.0",
+  "mandatory": false,
+  "downloadUrl": "https://...",
+  "releaseNotes": "Fitur baru...",
+  "isActive": true,
+  "releasedAt": "2026-11-15T00:00:00.000Z",
+  "createdAt": "2026-11-15T00:00:00.000Z",
+  "updatedAt": "2026-11-15T00:00:00.000Z"
+}
+```
+
+### AppVersionCheckResponse (publik)
+```json
+{
+  "latestVersion": "1.3.0",
+  "latestBuildNumber": 30,
+  "minSupportedVersion": "1.1.0",
+  "mandatory": true,
+  "updateAvailable": true,
+  "downloadUrl": "https://...",
+  "releaseNotes": "Fitur baru...",
+  "releasedAt": "2026-11-15T00:00:00.000Z"
+}
+```
+Bila belum ada versi: `latestVersion`, `latestBuildNumber`, `minSupportedVersion`, `downloadUrl`, `releaseNotes`, `releasedAt` semua `null`, `mandatory=false`, `updateAvailable=false`.
+
+## 2. Endpoint
+
+### GET `/api/app/version` (publik)
+Query: `platform` (ANDROID|IOS, case-insensitive), `version` (semver, opsional), `build` (integer, opsional).
+Logika:
+- Ambil AppVersion aktif (`isActive=true`) dengan buildNumber tertinggi untuk platform.
+- `updateAvailable`: jika `build` disediakan => `build < latestBuildNumber`; else jika `version` disediakan => semver `version < latestVersion`; else false.
+- `mandatory`: true jika record `mandatory=true` ATAU jika `version` disediakan dan `version < minSupportedVersion`.
+
+Respons 200: `AppVersionCheckResponse`. Tidak pernah 500 (jika error, log dan return data null dengan updateAvailable=false).
+
+### GET `/api/app/versions` (admin: OWNER)
+Respons 200: `{ "data": [AppVersion] }` urut platform ASC, buildNumber DESC.
+
+### POST `/api/app/versions` (admin: OWNER)
+Body: `{ "platform": "ANDROID|IOS" (opsional, default ANDROID), "version": "X.Y.Z" (wajib), "buildNumber": int (wajib, positif), "minSupportedVersion": "X.Y.Z" (wajib), "mandatory": bool (opsional, default false), "downloadUrl": URL (wajib), "releaseNotes": string (opsional), "isActive": bool (opsional, default true), "releasedAt": ISO datetime (opsional, default now) }`.
+
+Validasi: `version` dan `minSupportedVersion` harus format semver; `buildNumber` positif; `downloadUrl` harus URL valid.
+
+Unik: `(platform, buildNumber)`. Jika duplikat => 409.
+
+Respons 201: `{ "message": "Versi aplikasi berhasil dibuat", "data": AppVersion }`.
+
+### PATCH `/api/app/versions/{id}` (admin: OWNER)
+Body: subset AppVersion (semua field opsional). Validasi field yang dikirim.
+
+Respons 200: `{ "message": "Versi aplikasi berhasil diperbarui", "data": AppVersion }`. 404 jika id tidak ditemukan.
+
+### DELETE `/api/app/versions/{id}` (admin: OWNER)
+Soft delete: set `isActive=false`. Tidak menghapus record.
+
+Respons 200: `{ "message": "Versi aplikasi berhasil dihapus", "data": AppVersion }`. 404 jika id tidak ditemukan.
+
+## 3. Skema database
+| Tabel | Kolom |
+|---|---|
+| `app_versions` | id (uuid PK), platform ENUM(ANDROID,IOS) default ANDROID, version VARCHAR(191), buildNumber INT, min_supported_version VARCHAR(191), mandatory BOOL default false, download_url TEXT, release_notes TEXT NULL, is_active BOOL default true, released_at DATETIME(3) default now, created_at DATETIME(3) default now, updated_at DATETIME(3); unik (platform, buildNumber); index (platform, is_active, buildNumber) |
+
+Migrasi: `prisma/migrations/20261115071900_add_app_version/migration.sql`
