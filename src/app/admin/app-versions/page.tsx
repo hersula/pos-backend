@@ -23,6 +23,9 @@ type SourceMode = "upload" | "url";
 
 const SEMVER = /^\d+\.\d+\.\d+$/;
 
+// Cloudflare (paket Free/Pro) menolak request body > 100 MB dengan 413
+const MAX_UPLOAD_SIZE = 100 * 1000 * 1000;
+
 const inputStyle = {
   width: "100%",
   padding: "11px 13px",
@@ -66,7 +69,12 @@ function uploadApk(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(body.data);
       } else if (xhr.status === 413) {
-        reject(new AdminApiError("File terlalu besar untuk server (cek client_max_body_size di nginx)", 413));
+        reject(
+          new AdminApiError(
+            "File terlalu besar untuk server (batas Cloudflare 100 MB, atau client_max_body_size di nginx)",
+            413
+          )
+        );
       } else {
         reject(new AdminApiError(body?.message ?? "Gagal mengunggah APK", xhr.status));
       }
@@ -171,6 +179,12 @@ export default function AdminAppVersionsPage() {
     if (versions.some((v) => v.buildNumber === build)) return setFormError(`Build number ${build} sudah terdaftar`);
     if (!SEMVER.test(minSupportedVersion.trim())) return setFormError("Versi minimum harus format X.Y.Z");
     if (sourceMode === "upload" && !apkFile) return setFormError("Pilih file APK yang akan diunggah");
+    if (sourceMode === "upload" && apkFile && apkFile.size > MAX_UPLOAD_SIZE) {
+      return setFormError(
+        `APK ${formatSize(apkFile.size)} melebihi batas upload Cloudflare (100 MB). Pastikan memakai hasil ` +
+          "`flutter build apk --release`, bukan APK debug."
+      );
+    }
     if (sourceMode === "url" && !/^https?:\/\//.test(downloadUrl.trim())) {
       return setFormError("URL download harus diawali http:// atau https://");
     }

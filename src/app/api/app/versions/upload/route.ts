@@ -47,6 +47,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: "File bukan APK yang valid" }, { status: 400 });
     }
 
+    // Build debug Flutter membawa kernel_blob.bin (JIT). APK debug ditandatangani debug key,
+    // jadi tidak bisa menimpa aplikasi release yang sudah terpasang di HP.
+    if (buffer.includes("flutter_assets/kernel_blob.bin")) {
+      return NextResponse.json(
+        { message: "Ini APK debug. Unggah hasil `flutter build apk --release`." },
+        { status: 400 },
+      );
+    }
+
     const version = sanitizeNamePart(String(formData.get("version") ?? ""));
     const build = sanitizeNamePart(String(formData.get("build") ?? ""));
     const label = [version, build && `b${build}`].filter(Boolean).join("-");
